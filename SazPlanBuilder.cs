@@ -53,7 +53,7 @@ internal static class SazPlanBuilder {
 		"x-real-ip",
 	];
 
-	public static SazPlan Build(
+	public static Saz Build(
 		string sazPath,
 		SazBuildOptions options
 	) {
@@ -73,7 +73,7 @@ internal static class SazPlanBuilder {
 		var globalHeaders = BuildGlobalHeadersGroup(sessions);
 		var sessionsWithoutGlobalHeaders = RemoveGlobalHeaders(sessions, globalHeaders.Headers);
 
-		return new SazPlan(
+		return new Saz(
 			Path.GetFullPath(sazPath),
 			DateTimeOffset.UtcNow,
 			globalHeaders,
@@ -114,7 +114,7 @@ internal static class SazPlanBuilder {
 		return map;
 	}
 
-	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<SessionPlan> sessions) {
+	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<Session> sessions) {
 		var outputPath = Path.ChangeExtension(outputBasePath, ".sources.json");
 		var options = new JsonSerializerOptions {
 			WriteIndented = true,
@@ -138,9 +138,9 @@ internal static class SazPlanBuilder {
 		return outputPath;
 	}
 
-	static GlobalHeadersGroupPlan BuildGlobalHeadersGroup(List<SessionPlan> sessions) {
+	static GlobalHeadersGroup BuildGlobalHeadersGroup(List<Session> sessions) {
 		if (sessions.Count == 0)
-			return new GlobalHeadersGroupPlan("global-headers", new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+			return new GlobalHeadersGroup("global-headers", new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
 		var commonHeaders = sessions[0].Request.Headers
 			.OrderBy(header => header.Key, StringComparer.OrdinalIgnoreCase)
@@ -158,12 +158,12 @@ internal static class SazPlanBuilder {
 				commonHeaders.Remove(key);
 		}
 
-		return new GlobalHeadersGroupPlan("global-headers", SortHeaders(commonHeaders));
+		return new GlobalHeadersGroup("global-headers", SortHeaders(commonHeaders));
 	}
 
 
-	static List<SessionPlan> RemoveGlobalHeaders(
-		List<SessionPlan> sessions,
+	static List<Session> RemoveGlobalHeaders(
+		List<Session> sessions,
 		Dictionary<string, string> globalHeaders) {
 		if (globalHeaders.Count == 0)
 			return sessions;
@@ -183,11 +183,11 @@ internal static class SazPlanBuilder {
 			.ToList();
 	}
 
-	static bool IsConnectSession(SessionPlan session) {
+	static bool IsConnectSession(Session session) {
 		return string.Equals(session.Request.Method, "CONNECT", StringComparison.OrdinalIgnoreCase);
 	}
 
-	static bool IsCssSession(SessionPlan session) {
+	static bool IsCssSession(Session session) {
 		if (HasPathExtension(session.Request.Url, ".css"))
 			return true;
 
@@ -199,7 +199,7 @@ internal static class SazPlanBuilder {
 		return false;
 	}
 
-	static bool IsMediaSession(SessionPlan session) {
+	static bool IsMediaSession(Session session) {
 		if (HasPathExtension(session.Request.Url, MediaPathExtensions))
 			return true;
 
@@ -219,7 +219,7 @@ internal static class SazPlanBuilder {
 		return false;
 	}
 
-	static bool IsSourcemapSession(SessionPlan session) {
+	static bool IsSourcemapSession(Session session) {
 		return HasPathExtension(session.Request.Url, ".map");
 	}
 
@@ -251,7 +251,7 @@ internal static class SazPlanBuilder {
 		return extensions.Contains(extension.ToLowerInvariant());
 	}
 
-	static SessionPlan BuildSessionPlan(SessionRaw raw, bool includeMetadata) {
+	static Session BuildSessionPlan(SessionRaw raw, bool includeMetadata) {
 		var metadata = includeMetadata ? ParseMetadata(raw.MetadataBytes, raw.Id) : null;
 		var request = ParseHttpMessage(raw.ClientRequestBytes, isRequest: true);
 		var response = ParseHttpMessage(raw.ServerResponseBytes, isRequest: false);
@@ -280,7 +280,7 @@ internal static class SazPlanBuilder {
 			.Select(h => h.Key)
 			.ToList();
 
-		var requestPlan = new RequestPlan(
+		var requestPlan = new Request(
 			request.StartLine,
 			requestLine.Method,
 			requestLine.Target,
@@ -297,7 +297,7 @@ internal static class SazPlanBuilder {
 			BuildRequestSteps(requestLine, requestHeaders, dynamicHeaders, requestBody)
 		);
 
-		var responsePlan = new ResponsePlan(
+		var responsePlan = new Response(
 			response.StartLine,
 			statusLine.Code,
 			statusLine.ReasonPhrase,
@@ -308,7 +308,7 @@ internal static class SazPlanBuilder {
 			BuildResponseSteps(statusLine, response.Headers, responseBody)
 		);
 
-		return new SessionPlan(
+		return new Session(
 			raw.Id,
 			metadata,
 			requestPlan,
@@ -316,9 +316,9 @@ internal static class SazPlanBuilder {
 		);
 	}
 
-	static MetadataPlan ParseMetadata(byte[]? metadataBytes, int sessionId) {
+	static Metadata ParseMetadata(byte[]? metadataBytes, int sessionId) {
 		if (metadataBytes is null || metadataBytes.Length == 0)
-			return new MetadataPlan(new Dictionary<string, string>(), new Dictionary<string, string>());
+			return new Metadata(new Dictionary<string, string>(), new Dictionary<string, string>());
 
 		var flags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		var timers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -330,7 +330,7 @@ internal static class SazPlanBuilder {
 		}
 		catch (Exception ex) {
 			LogMalformedMetadata(sessionId, metadataBytes, ex);
-			return new MetadataPlan(flags, timers);
+			return new Metadata(flags, timers);
 		}
 
 		foreach (var flag in doc.Descendants("SessionFlag")) {
@@ -345,7 +345,7 @@ internal static class SazPlanBuilder {
 			foreach (var attr in timersElement.Attributes())
 				timers[attr.Name.LocalName] = attr.Value;
 
-		return new MetadataPlan(flags, timers);
+		return new Metadata(flags, timers);
 	}
 
 	static void LogMalformedMetadata(int sessionId, byte[] metadataBytes, Exception ex) {
@@ -366,22 +366,21 @@ internal static class SazPlanBuilder {
 		}
 	}
 
+	// splits the rawBytes of a request or response into headers and body-bytes
 	static HttpMessageParts ParseHttpMessage(byte[]? rawBytes, bool isRequest) {
 		if (rawBytes is null || rawBytes.Length == 0)
 			return new HttpMessageParts(string.Empty, new Dictionary<string, string>(), Array.Empty<byte>());
 
-		var split = FindHeaderBodySeparator(rawBytes);
-		var headerBytes = split.headerBytes;
-		var bodyBytes = split.bodyBytes;
+		(byte[] headerBytes, byte[] bodyBytes) = FindHeaderBodySeparator(rawBytes);
 
-		var headerText = Encoding.Latin1.GetString(headerBytes);
-		var lines = headerText.Split(["\r\n", "\n"], StringSplitOptions.None);
-		var startLine = lines.FirstOrDefault() ?? string.Empty;
+		string headerText = Encoding.Latin1.GetString(headerBytes);
+		string[] lines = headerText.Split(["\r\n", "\n"], StringSplitOptions.None);
+		string startLine = lines.FirstOrDefault() ?? string.Empty;
 
-		var headers = ParseHeaders(lines.Skip(1));
+		Dictionary<string, string> headers = ParseHeaders(lines.Skip(1));
 
 		if (isRequest && !headers.ContainsKey("Host") && startLine.StartsWith("CONNECT ", StringComparison.OrdinalIgnoreCase)) {
-			var target = startLine.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault();
+			string? target = startLine.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault();
 			if (!string.IsNullOrWhiteSpace(target))
 				headers["Host"] = target;
 		}
@@ -481,7 +480,7 @@ internal static class SazPlanBuilder {
 		return new StatusLineParts(code, reason);
 	}
 
-	static string BuildUrl(string method, string target, string? host, MetadataPlan? metadata) {
+	static string BuildUrl(string method, string target, string? host, Metadata? metadata) {
 		if (Uri.TryCreate(target, UriKind.Absolute, out var absolute))
 			return absolute.ToString();
 
@@ -550,7 +549,7 @@ internal static class SazPlanBuilder {
 		RequestLineParts requestLine,
 		Dictionary<string, string> headers,
 		List<string> dynamicHeaders,
-		BodyPlan body) {
+		Body body) {
 		var steps = new List<string> {
 			$"Create {requestLine.Method} request using HTTP version {requestLine.Version}.",
 			"Set URL from host + target path and include query parameters.",
@@ -577,7 +576,7 @@ internal static class SazPlanBuilder {
 	static List<string> BuildResponseSteps(
 		StatusLineParts status,
 		Dictionary<string, string> headers,
-		BodyPlan body) {
+		Body body) {
 		var steps = new List<string>
 		{
 			$"Expect HTTP status code {status.Code} ({status.ReasonPhrase}).",

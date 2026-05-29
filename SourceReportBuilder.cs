@@ -4,7 +4,7 @@ internal static class SourceReportBuilder {
 
 	public static SessionSourcesReport BuildSessionSourcesReport(
 		int sessionIndex,
-		IReadOnlyList<SessionPlan> sessions,
+		IReadOnlyList<Session> sessions,
 		List<string>? missing = null,
 		Dictionary<string, int>? missingIndexes = null
 	) {
@@ -20,8 +20,8 @@ internal static class SourceReportBuilder {
 	}
 
 	static List<RequestSourceFinding> BuildRequestSourceFindings(
-		SessionPlan targetSession,
-		IReadOnlyList<SessionPlan> sessions,
+		Session targetSession,
+		IReadOnlyList<Session> sessions,
 		int sessionIndex,
 		List<string>? missing = null,
 		Dictionary<string, int>? missingIndexes = null
@@ -44,7 +44,7 @@ internal static class SourceReportBuilder {
 
 	static List<RequestSourceFinding> BuildPathSourceFindings(
 		RequestPiece pathPiece,
-		IReadOnlyList<SessionPlan> previousSessions,
+		IReadOnlyList<Session> previousSessions,
 		List<string>? missing,
 		Dictionary<string, int>? missingIndexes
 	) {
@@ -72,7 +72,7 @@ internal static class SourceReportBuilder {
 
 	static string? FindPathMatchWithProgressiveTrim(
 		string path,
-		IReadOnlyList<SessionPlan> previousSessions,
+		IReadOnlyList<Session> previousSessions,
 		out SourceFinding? source
 	) {
 		source = null;
@@ -90,7 +90,7 @@ internal static class SourceReportBuilder {
 		return null;
 	}
 
-	static List<SourceFinding> GetOrderedSources(IReadOnlyList<SessionPlan> previousSessions, string needle) {
+	static List<SourceFinding> GetOrderedSources(IReadOnlyList<Session> previousSessions, string needle) {
 		var sources = new HashSet<SourceFinding>();
 		foreach (var previousSession in previousSessions)
 			foreach (var source in FindSourcesInPreviousResponse(previousSession, needle))
@@ -164,7 +164,7 @@ internal static class SourceReportBuilder {
 		return normalized[..lastSlash];
 	}
 
-	static List<RequestPiece> BuildRequestPieces(SessionPlan targetSession) {
+	static List<RequestPiece> BuildRequestPieces(Session targetSession) {
 		var pieces = new List<RequestPiece>();
 
 		if (!string.IsNullOrWhiteSpace(targetSession.Request.Host))
@@ -188,7 +188,7 @@ internal static class SourceReportBuilder {
 		return pieces;
 	}
 
-	static string GetRequestPath(RequestPlan request) {
+	static string GetRequestPath(Request request) {
 		if (Uri.TryCreate(request.Url, UriKind.Absolute, out var absoluteUri))
 			return absoluteUri.AbsolutePath;
 
@@ -196,7 +196,7 @@ internal static class SourceReportBuilder {
 		return target;
 	}
 
-	static List<FormBodyEntry> ExtractBodyParameters(RequestPlan request) {
+	static List<FormBodyEntry> ExtractBodyParameters(Request request) {
 		var parameters = new List<FormBodyEntry>();
 
 		if (request.FormBody is { Count: > 0 }) {
@@ -217,7 +217,7 @@ internal static class SourceReportBuilder {
 		return parameters;
 	}
 
-	static IEnumerable<SourceFinding> FindSourcesInPreviousResponse(SessionPlan previousSession, string needle) {
+	static IEnumerable<SourceFinding> FindSourcesInPreviousResponse(Session previousSession, string needle) {
 		if (string.IsNullOrWhiteSpace(needle))
 			yield break;
 

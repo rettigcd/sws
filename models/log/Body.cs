@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-internal sealed record BodyPlan(
+internal sealed record Body(
 	int Length,
 	string? ContentType,
 	string Format,

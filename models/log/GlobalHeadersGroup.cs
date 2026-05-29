@@ -1,4 +1,4 @@
-internal sealed record GlobalHeadersGroupPlan(
+internal sealed record GlobalHeadersGroup(
 	string Name,
 	Dictionary<string, string> Headers
 );

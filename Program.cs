@@ -92,7 +92,7 @@ static string ResolveOutputPath(string inputPath, string? outputPath) {
 	return Path.ChangeExtension(inputPath, ".plan.json");
 }
 
-static void WriteSazPlanAsJson(string outputPath, bool pretty, SazPlan plan) {
+static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
 	var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions {
 		WriteIndented = pretty,
 		IndentCharacter = '\t',

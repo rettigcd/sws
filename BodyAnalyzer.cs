@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 
 internal static class BodyAnalyzer {
-	public static BodyPlan BuildBodyPlan(Dictionary<string, string> headers, byte[] bodyBytes) {
+	public static Body BuildBodyPlan(Dictionary<string, string> headers, byte[] bodyBytes) {
 		var contentType = GetHeader(headers, "Content-Type");
 		var bodyText = DecodeBodyText(headers, bodyBytes);
 
@@ -14,7 +14,7 @@ internal static class BodyAnalyzer {
 		else if (format == "form-url-encoded")
 			schemaHints.AddRange(ParseFormKeys(bodyText));
 
-		return new BodyPlan(
+		return new Body(
 			bodyBytes.Length,
 			contentType,
 			format,

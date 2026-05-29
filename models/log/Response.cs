@@ -1,11 +1,11 @@
 using System.Text.Json;
 
-internal sealed record ResponsePlan(
+internal sealed record Response(
 	string OriginalStartLine,
 	int StatusCode,
 	string ReasonPhrase,
 	Dictionary<string, string> Headers,
-	BodyPlan Body,
+	Body Body,
 	string? ResponseText,
 	JsonElement? ResponseJson,
 	List<string> VerificationSteps
