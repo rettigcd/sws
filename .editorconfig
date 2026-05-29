@@ -17,3 +17,6 @@ dotnet_style_operator_placement_when_wrapping = beginning_of_line
 
 # Do not require explicit accessibility modifiers (e.g., omit 'private' when default applies).
 csharp_style_require_accessibility_modifiers = never:suggestion
+
+# Prefer explicit built-in types over var for simple declarations.
+csharp_style_var_for_built_in_types = false:suggestion

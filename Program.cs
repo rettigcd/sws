@@ -18,15 +18,11 @@ if (!string.Equals(Path.GetExtension(inputPath), ".saz", StringComparison.Ordina
 	return 2;
 }
 
+
 string? outputPath = null;
-var pretty = true;
-var includeConnect = false;
-var includeCss = false;
-var includeMedia = false;
-var includeMetadata = false;
-var includeSourcemaps = false;
-int? sourcesSessionIndex = null;
-var sourcesAll = false;
+bool pretty = true;
+bool sourcesAll = false;
+SazBuildOptions buildOptions = new ();
 
 for (var i = 1; i < args.Length; i++) {
 	var arg = args[i];
@@ -44,32 +40,19 @@ for (var i = 1; i < args.Length; i++) {
 		outputPath = args[++i];
 	}
 	else if (arg is "--include-connect") {
-		includeConnect = true;
+		buildOptions.IncludeConnect = true;
 	}
 	else if (arg is "--include-css") {
-		includeCss = true;
+		buildOptions.IncludeCss = true;
 	}
 	else if (arg is "--include-media") {
-		includeMedia = true;
+		buildOptions.IncludeMedia = true;
 	}
 	else if (arg is "--include-metadata") {
-		includeMetadata = true;
+		buildOptions.IncludeMetadata = true;
 	}
 	else if (arg is "--include-sourcemaps") {
-		includeSourcemaps = true;
-	}
-	else if (arg is "--sources") {
-		if (i + 1 >= args.Length) {
-			Console.Error.WriteLine("Missing value for --sources");
-			return 2;
-		}
-
-		if (!int.TryParse(args[++i], out var parsedSessionIndex) || parsedSessionIndex < 1) {
-			Console.Error.WriteLine("--sources requires a session index of 1 or greater");
-			return 2;
-		}
-
-		sourcesSessionIndex = parsedSessionIndex;
+		buildOptions.IncludeSourcemaps = true;
 	}
 	else if (arg is "--sources-all") {
 		sourcesAll = true;
@@ -81,38 +64,15 @@ for (var i = 1; i < args.Length; i++) {
 }
 
 try {
-	var plan = SazPlanBuilder.Build(inputPath, includeConnect, includeCss, includeMedia, includeMetadata, includeSourcemaps);
-	var options = new JsonSerializerOptions {
-		WriteIndented = pretty,
-		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-	};
-	var json = JsonSerializer.Serialize(plan, options);
+	var plan = SazPlanBuilder.Build(inputPath, buildOptions);
+	var planOutputPath = ResolveOutputPath(inputPath, outputPath);
 
-	if (string.IsNullOrWhiteSpace(outputPath)) {
-		Console.WriteLine(json);
-	}
-	else {
-		File.WriteAllText(outputPath, json, Encoding.UTF8);
-		Console.WriteLine($"Plan written: {outputPath}");
-	}
-
-	if (sourcesAll && sourcesSessionIndex is not null) {
-		Console.Error.WriteLine("Use either --sources or --sources-all, not both.");
-		return 2;
-	}
+	WriteSazPlanAsJson(planOutputPath, pretty, plan);
 
 	if (sourcesAll) {
-		var sourcesBasePath = outputPath ?? inputPath;
-		var sourcesPath = SazPlanBuilder.WriteAllSessionSourcesReport(sourcesBasePath, plan.Sessions);
-		Console.WriteLine($"Sources written: {sourcesPath}");
-	}
-	else if (sourcesSessionIndex is not null) {
-		var sourcesBasePath = outputPath ?? inputPath;
-		var sourcesPath = SazPlanBuilder.WriteSessionSourcesReport(sourcesBasePath, sourcesSessionIndex.Value, plan.Sessions);
-		Console.WriteLine($"Sources written: {sourcesPath}");
+		SazPlanBuilder.WriteAllSessionSourcesReport(planOutputPath, plan.Sessions);
 	}
 
-	Console.WriteLine($"Sessions planned: {plan.Sessions.Count}");
 	return 0;
 }
 catch (Exception ex) {
@@ -122,5 +82,23 @@ catch (Exception ex) {
 
 static void PrintUsage() {
 	Console.WriteLine("Usage:");
-	Console.WriteLine("  sws <input.saz> [--out plan.json] [--pretty|--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps] [--sources <sessionIndex>] [--sources-all]");
+	Console.WriteLine("  sws <input.saz> [--out plan.json] [--pretty|--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps] [--sources-all]");
+}
+
+static string ResolveOutputPath(string inputPath, string? outputPath) {
+	if (!string.IsNullOrWhiteSpace(outputPath))
+		return outputPath;
+
+	return Path.ChangeExtension(inputPath, ".plan.json");
+}
+
+static void WriteSazPlanAsJson(string outputPath, bool pretty, SazPlan plan) {
+	var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions {
+		WriteIndented = pretty,
+		IndentCharacter = '\t',
+		IndentSize = 1,
+		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+	});
+
+	File.WriteAllText(outputPath, json, Encoding.UTF8);
 }

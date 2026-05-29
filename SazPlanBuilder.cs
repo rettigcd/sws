@@ -55,12 +55,33 @@ internal static class SazPlanBuilder {
 
 	public static SazPlan Build(
 		string sazPath,
-		bool includeConnect = false,
-		bool includeCss = false,
-		bool includeMedia = false,
-		bool includeMetadata = false,
-		bool includeSourcemaps = false
+		SazBuildOptions options
 	) {
+		var map = LoadSessionRawMap(sazPath);
+
+		var sessions = map
+			.OrderBy(kvp => kvp.Key)
+			.Select(kvp => BuildSessionPlan(kvp.Value, options.IncludeMetadata))
+			.Where(session => 
+				   (options.IncludeConnect || !IsConnectSession(session)) 
+				&& (options.IncludeCss || !IsCssSession(session))
+				&& (options.IncludeMedia || !IsMediaSession(session))
+				&& (options.IncludeSourcemaps || !IsSourcemapSession(session))
+			)
+			.ToList();
+
+		var globalHeaders = BuildGlobalHeadersGroup(sessions);
+		var sessionsWithoutGlobalHeaders = RemoveGlobalHeaders(sessions, globalHeaders.Headers);
+
+		return new SazPlan(
+			Path.GetFullPath(sazPath),
+			DateTimeOffset.UtcNow,
+			globalHeaders,
+			sessionsWithoutGlobalHeaders
+		);
+	}
+
+	static Dictionary<int, SessionRaw> LoadSessionRawMap(string sazPath) {
 		using var stream = File.OpenRead(sazPath);
 		using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
 
@@ -90,46 +111,15 @@ internal static class SazPlanBuilder {
 			}
 		}
 
-		var sessions = map
-			.OrderBy(kvp => kvp.Key)
-			.Select(kvp => BuildSessionPlan(kvp.Value, includeMetadata))
-			.Where(session => 
-				   (includeConnect || !IsConnectSession(session)) 
-				&& (includeCss || !IsCssSession(session))
-				&& (includeMedia || !IsMediaSession(session))
-				&& (includeSourcemaps || !IsSourcemapSession(session))
-			)
-			.ToList();
-
-		var globalHeaders = BuildGlobalHeadersGroup(sessions);
-		var sessionsWithoutGlobalHeaders = RemoveGlobalHeaders(sessions, globalHeaders.Headers);
-
-		return new SazPlan(
-			Path.GetFullPath(sazPath),
-			DateTimeOffset.UtcNow,
-			globalHeaders,
-			sessionsWithoutGlobalHeaders
-		);
-	}
-
-	public static string WriteSessionSourcesReport(string outputBasePath, int sessionIndex, IReadOnlyList<SessionPlan> sessions) {
-		if (sessionIndex < 1 || sessionIndex > sessions.Count)
-			throw new ArgumentOutOfRangeException(nameof(sessionIndex), sessionIndex, $"Session index must be between 1 and {sessions.Count}.");
-
-		var outputPath = Path.ChangeExtension(outputBasePath, ".sources.json");
-		var options = new JsonSerializerOptions {
-			WriteIndented = true,
-			DefaultIgnoreCondition = JsonIgnoreCondition.Never,
-		};
-		var report = SourceReportBuilder.BuildSessionSourcesReport(sessionIndex, sessions);
-		File.WriteAllText(outputPath, JsonSerializer.Serialize(report, options), Encoding.UTF8);
-		return outputPath;
+		return map;
 	}
 
 	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<SessionPlan> sessions) {
 		var outputPath = Path.ChangeExtension(outputBasePath, ".sources.json");
 		var options = new JsonSerializerOptions {
 			WriteIndented = true,
+			IndentCharacter = '\t',
+			IndentSize = 1,
 			DefaultIgnoreCondition = JsonIgnoreCondition.Never,
 		};
 
@@ -140,7 +130,7 @@ internal static class SazPlanBuilder {
 			Path.GetFullPath(outputBasePath),
 			missing,
 			sessions
-				.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index + 1, sessions, missing, missingIndexes))
+				.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, sessions, missing, missingIndexes))
 				.ToList()
 		);
 
