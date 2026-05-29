@@ -22,19 +22,19 @@ dotnet build
 ## Run
 
 ```bash
-dotnet run -- <path-to-capture.saz> --out plan.json --pretty
+dotnet run -- <path-to-capture.saz> --out plan.json
 ```
 
 Options:
 
 - `--out <file>`: write JSON to file (otherwise prints to stdout)
-- `--pretty`: indented JSON output (default)
+- default output is indented JSON
 - `--compact`: compact JSON output
 
 ## Example
 
 ```bash
-dotnet run -- ./capture.saz --out ./capture.plan.json --pretty
+dotnet run -- ./capture.saz --out ./capture.plan.json
 ```
 
 The output is a machine-readable plan you can feed into a later code generator or replay harness.
