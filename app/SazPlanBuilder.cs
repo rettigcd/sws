@@ -53,6 +53,11 @@ internal static class SazPlanBuilder {
 		"x-real-ip",
 	];
 
+	static readonly HashSet<string> ExcludedHosts =
+	[
+		"svcs.tql.com",
+	];
+
 	public static Saz Build(
 		string sazPath,
 		SazBuildOptions options
@@ -67,6 +72,7 @@ internal static class SazPlanBuilder {
 				&& (options.IncludeCss || !IsCssSession(session))
 				&& (options.IncludeMedia || !IsMediaSession(session))
 				&& (options.IncludeSourcemaps || !IsSourcemapSession(session))
+				&& !IsExcludedHostSession(session)
 			)
 			.ToList();
 
@@ -220,6 +226,29 @@ internal static class SazPlanBuilder {
 
 	static bool IsSourcemapSession(Session session) {
 		return HasPathExtension(session.Request.Url, ".map");
+	}
+
+	static bool IsExcludedHostSession(Session session) {
+		var host = GetNormalizedHost(session);
+		return !string.IsNullOrWhiteSpace(host) && ExcludedHosts.Contains(host);
+	}
+
+	static string GetNormalizedHost(Session session) {
+		if (Uri.TryCreate(session.Request.Url, UriKind.Absolute, out var uri))
+			return uri.Host.ToLowerInvariant();
+
+		var host = session.Request.Host?.Trim() ?? string.Empty;
+		if (host.Length == 0)
+			return string.Empty;
+
+		if (!host.StartsWith("[", StringComparison.Ordinal)) {
+			var firstColon = host.IndexOf(":", StringComparison.Ordinal);
+			var lastColon = host.LastIndexOf(":", StringComparison.Ordinal);
+			if (firstColon > 0 && firstColon == lastColon)
+				host = host[..firstColon];
+		}
+
+		return host.ToLowerInvariant();
 	}
 
 	static bool HasPathExtension(string urlOrPath, string extension) {
