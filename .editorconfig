@@ -1,0 +1,19 @@
+root = true
+
+[*.cs]
+# K&R-style braces: keep opening braces on the same line.
+csharp_new_line_before_open_brace = none
+
+# Use tabs for indentation, displayed as width 4.
+indent_style = tab
+indent_size = 4
+tab_width = 4
+
+# Prefer no braces for single-statement control blocks (if/else/for/while).
+csharp_prefer_braces = false:suggestion
+
+# Place operators at the beginning of the next wrapped line.
+dotnet_style_operator_placement_when_wrapping = beginning_of_line
+
+# Do not require explicit accessibility modifiers (e.g., omit 'private' when default applies).
+csharp_style_require_accessibility_modifiers = never:suggestion
