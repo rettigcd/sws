@@ -1,0 +1,17 @@
+* Find all objects assigned to Source and have them all Implement IProvideValue
+
+* identify if a request is going to Microsofts B2C endpoint and create a special RequestPlan to handle that
+
+* Make all IProvideValues actually return the value they claim to provide.
+
+Create a UI where user can correct values that need mapped or not.
+
+Create a Source that is "random int" or "new GUID"
+
+IDEA - Maybe code_challenge and CodeVerifyier have a CodeChallenge/Verifyier source that generates a new pair when necessary.
+
+Detect microsofts B2C authentication and auto-map {client-request-id} to NEW GUID
+
+Auto-map nonce to to a GUID
+
+Figure out how 1TRAX is generating state and auto-map it too (for B2C)
