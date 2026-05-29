@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -36,10 +37,12 @@ internal sealed class RequestPlan {
 		Headers = new Dictionary<string, string>(request.Headers, StringComparer.OrdinalIgnoreCase);
 		Cookies = new Dictionary<string, string>(request.Cookies, StringComparer.OrdinalIgnoreCase);
 		Body = request.Body;
-		JsonBody = request.JsonBody?.Clone();
+		JsonBody = request.JsonBody is JsonElement jsonBody
+			? BuildJsonBodyPlaceholders(jsonBody)
+			: null;
 		FormBody = request.FormBody is null
 			? null
-			: request.FormBody.Select(entry => new FormBodyEntry(entry.Key, entry.Value)).ToList();
+			: BuildFormBodyPlaceholders(request.FormBody);
 	}
 
 	public Task<HttpResponseMessage> Execute(HttpClient? client = null, CancellationToken cancellationToken = default) {
@@ -76,11 +79,16 @@ internal sealed class RequestPlan {
 	}
 
 	HttpContent? BuildHttpContent() {
-		if (FormBody is { Count: > 0 })
-			return new FormUrlEncodedContent(FormBody.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal));
+		if (FormBody is { Count: > 0 }) {
+			var resolvedFormBody = FormBody
+				.Select(entry => new FormBodyEntry(entry.Key, ResolvePlaceholders(entry.Value)))
+				.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+			return new FormUrlEncodedContent(resolvedFormBody);
+		}
 
 		if (JsonBody is JsonElement jsonBody) {
-			var json = JsonSerializer.Serialize(jsonBody);
+			var resolvedJson = ResolveJsonBodyPlaceholders(jsonBody);
+			var json = JsonSerializer.Serialize(resolvedJson);
 			return new StringContent(json, Encoding.UTF8, "application/json");
 		}
 
@@ -146,22 +154,136 @@ internal sealed class RequestPlan {
 				continue;
 			}
 
-			var placeholderBase = $"{{{pair.Key}}}";
-			var placeholder = placeholderBase;
-			var collisionIndex = 1;
-			while (Replacements.ContainsKey(placeholder)) {
-				placeholder = $"{{{pair.Key}_{collisionIndex.ToString(CultureInfo.InvariantCulture)}}}";
-				collisionIndex++;
-			}
-
-			Replacements[placeholder] = new Replacement {
-				OriginalValue = pair.Value,
-				Placeholder = placeholder,
-			};
+			var placeholder = CreateReplacementPlaceholder(pair.Key, pair.Value);
 			normalized[pair.Key] = placeholder;
 		}
 
 		return normalized;
+	}
+
+	List<FormBodyEntry> BuildFormBodyPlaceholders(IReadOnlyList<FormBodyEntry> formBody) {
+		var normalized = new List<FormBodyEntry>(formBody.Count);
+
+		foreach (var entry in formBody) {
+			if (!InterestingFinder.IsInteresting(entry.Value)) {
+				normalized.Add(new FormBodyEntry(entry.Key, entry.Value));
+				continue;
+			}
+
+			var placeholder = CreateReplacementPlaceholder(entry.Key, entry.Value);
+			normalized.Add(new FormBodyEntry(entry.Key, placeholder));
+		}
+
+		return normalized;
+	}
+
+	JsonElement BuildJsonBodyPlaceholders(JsonElement jsonBody) {
+		var node = JsonNode.Parse(jsonBody.GetRawText());
+		if (node is null)
+			return jsonBody.Clone();
+
+		var withPlaceholders = ReplaceInterestingJsonValues(node, "body");
+		return JsonNodeToElement(withPlaceholders);
+	}
+
+	JsonElement ResolveJsonBodyPlaceholders(JsonElement jsonBody) {
+		var node = JsonNode.Parse(jsonBody.GetRawText());
+		if (node is null)
+			return jsonBody;
+
+		var resolved = ReplaceJsonValues(node, ResolvePlaceholders);
+		return JsonNodeToElement(resolved);
+	}
+
+	JsonNode ReplaceInterestingJsonValues(JsonNode node, string currentName) {
+		switch (node) {
+			case JsonObject obj: {
+				var clone = new JsonObject();
+				foreach (var property in obj) {
+					if (property.Value is null) {
+						clone[property.Key] = null;
+						continue;
+					}
+
+					clone[property.Key] = ReplaceInterestingJsonValues(property.Value, property.Key);
+				}
+
+				return clone;
+			}
+			case JsonArray array: {
+				var clone = new JsonArray();
+				foreach (var item in array) {
+					clone.Add(item is null ? null : ReplaceInterestingJsonValues(item, currentName));
+				}
+
+				return clone;
+			}
+			case JsonValue value:
+				if (value.TryGetValue<string>(out var stringValue) && InterestingFinder.IsInteresting(stringValue)) {
+					var placeholder = CreateReplacementPlaceholder(currentName, stringValue);
+					return JsonValue.Create(placeholder)!;
+				}
+
+				return value.DeepClone();
+			default:
+				return node.DeepClone();
+		}
+	}
+
+	JsonNode ReplaceJsonValues(JsonNode node, Func<string, string> transform) {
+		switch (node) {
+			case JsonObject obj: {
+				var clone = new JsonObject();
+				foreach (var property in obj) {
+					if (property.Value is null) {
+						clone[property.Key] = null;
+						continue;
+					}
+
+					clone[property.Key] = ReplaceJsonValues(property.Value, transform);
+				}
+
+				return clone;
+			}
+			case JsonArray array: {
+				var clone = new JsonArray();
+				foreach (var item in array) {
+					clone.Add(item is null ? null : ReplaceJsonValues(item, transform));
+				}
+
+				return clone;
+			}
+			case JsonValue value:
+				if (value.TryGetValue<string>(out var stringValue))
+					return JsonValue.Create(transform(stringValue))!;
+
+				return value.DeepClone();
+			default:
+				return node.DeepClone();
+		}
+	}
+
+	string CreateReplacementPlaceholder(string name, string value) {
+		var normalizedName = string.IsNullOrWhiteSpace(name) ? "value" : name;
+		var placeholder = $"{{{normalizedName}}}";
+		var collisionIndex = 1;
+
+		while (Replacements.ContainsKey(placeholder)) {
+			placeholder = $"{{{normalizedName}_{collisionIndex.ToString(CultureInfo.InvariantCulture)}}}";
+			collisionIndex++;
+		}
+
+		Replacements[placeholder] = new Replacement {
+			OriginalValue = value,
+			Placeholder = placeholder,
+		};
+
+		return placeholder;
+	}
+
+	static JsonElement JsonNodeToElement(JsonNode node) {
+		using var document = JsonDocument.Parse(node.ToJsonString());
+		return document.RootElement.Clone();
 	}
 
 	string ResolvePlaceholders(string value) {
