@@ -30,10 +30,12 @@ Options:
 - `--out <file>`: write JSON to file (otherwise prints to stdout)
 - default output is indented JSON
 - `--compact`: compact JSON output
+- `--sources-all`: write-out a plan for obtaining the substrings used in the requests
 
 ## Example
 
 ```bash
+dotnet run --project app/sws.csproj  -- C:/Users/myusername/Desktop/capture.saz --sources-all
 dotnet run -- ./capture.saz --out ./capture.plan.json
 ```
 
