@@ -49,12 +49,20 @@ internal sealed class RequestPlan {
 		return ExecuteInternal(client, cancellationToken);
 	}
 
+	public Task<HttpResponseMessage> Execute(
+		RequestExecutionContext context,
+		bool seedCapturedCookies = true,
+		CancellationToken cancellationToken = default
+	) {
+		return ExecuteWithCookieStoreInternal(context, seedCapturedCookies, cancellationToken);
+	}
+
 	async Task<HttpResponseMessage> ExecuteInternal(HttpClient? client, CancellationToken cancellationToken) {
 		bool ownsClient = client is null;
 		client ??= new HttpClient();
 
 		try {
-			using var message = BuildHttpRequestMessage();
+			using var message = BuildHttpRequestMessage(includeManualCookies: true);
 			return await client.SendAsync(message, cancellationToken).ConfigureAwait(false);
 		}
 		finally {
@@ -63,7 +71,21 @@ internal sealed class RequestPlan {
 		}
 	}
 
-	HttpRequestMessage BuildHttpRequestMessage() {
+	async Task<HttpResponseMessage> ExecuteWithCookieStoreInternal(
+		RequestExecutionContext context,
+		bool seedCapturedCookies,
+		CancellationToken cancellationToken
+	) {
+		ArgumentNullException.ThrowIfNull(context);
+
+		using var message = BuildHttpRequestMessage(includeManualCookies: false);
+		if (seedCapturedCookies)
+			SeedCapturedCookies(context.CookieStore, message.RequestUri);
+
+		return await context.Client.SendAsync(message, cancellationToken).ConfigureAwait(false);
+	}
+
+	HttpRequestMessage BuildHttpRequestMessage(bool includeManualCookies) {
 		var message = new HttpRequestMessage(new HttpMethod(Method), BuildRequestUri()) {
 			Version = Version,
 		};
@@ -73,9 +95,24 @@ internal sealed class RequestPlan {
 			message.Content = content;
 
 		ApplyHeaders(message);
-		ApplyCookies(message);
+		if (includeManualCookies)
+			ApplyCookies(message);
 
 		return message;
+	}
+
+	void SeedCapturedCookies(CookieContainer cookieStore, Uri? requestUri) {
+		if (requestUri is null || Cookies.Count == 0)
+			return;
+
+		foreach (var cookie in Cookies) {
+			try {
+				cookieStore.Add(requestUri, new Cookie(cookie.Key, cookie.Value));
+			}
+			catch (CookieException) {
+				// Skip malformed captured cookies while still allowing valid ones.
+			}
+		}
 	}
 
 	HttpContent? BuildHttpContent() {

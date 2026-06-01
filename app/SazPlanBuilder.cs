@@ -130,12 +130,14 @@ internal static class SazPlanBuilder {
 		};
 
 		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		var unsourcedCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
 		var report = new SessionSourcesBatchReport(
 			Path.GetFullPath(outputBasePath),
 			missing,
+			unsourcedCookies,
 			sessions
-				.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, sessions, missing))
+				.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, sessions, missing, unsourcedCookies))
 				.ToList()
 		);
 

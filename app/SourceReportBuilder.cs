@@ -5,11 +5,15 @@ internal static class SourceReportBuilder {
 	public static RequestSources BuildSessionSourcesReport(
 		int sessionIndex,
 		IReadOnlyList<Session> sessions,
-		Dictionary<string, string>? missing = null
+		Dictionary<string, string>? missing = null,
+		Dictionary<string, string>? unsourcedCookies = null
 	) {
 		var targetSession = sessions[sessionIndex];
-		var requestPlan = new RequestPlan(targetSession.Request);
 		var previousSessions = sessions.Take(sessionIndex).ToList();
+		var unsourcedCookieList = BuildUnsourcedRequestCookies(targetSession, previousSessions);
+		RegisterUnsourcedCookies(unsourcedCookies, unsourcedCookieList);
+		var requestForPlan = BuildRequestForCookieJar(targetSession.Request, unsourcedCookieList);
+		var requestPlan = new RequestPlan(requestForPlan);
 		PopulateReplacementSources(requestPlan, previousSessions, missing);
 
 		return new RequestSources(
@@ -20,6 +24,61 @@ internal static class SourceReportBuilder {
 			requestPlan,
 			null
 		);
+	}
+
+	static void RegisterUnsourcedCookies(
+		Dictionary<string, string>? unsourcedCookieDictionary,
+		IReadOnlyList<UnsourcedRequestCookie> unsourcedCookies
+	) {
+		if (unsourcedCookieDictionary is null || unsourcedCookies.Count == 0)
+			return;
+
+		foreach (var unsourcedCookie in unsourcedCookies)
+			RegisterDictionaryValue(unsourcedCookieDictionary, unsourcedCookie.Name, unsourcedCookie.Value);
+	}
+
+	static Request BuildRequestForCookieJar(Request original, IReadOnlyList<UnsourcedRequestCookie> unsourcedCookies) {
+		var filteredCookies = unsourcedCookies
+			.ToDictionary(cookie => cookie.Name, cookie => cookie.Value, StringComparer.OrdinalIgnoreCase);
+
+		var filteredHeaders = original.Headers
+			.Where(header => !string.Equals(header.Key, "Cookie", StringComparison.OrdinalIgnoreCase))
+			.ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
+
+		return original with {
+			Cookies = filteredCookies,
+			Headers = filteredHeaders,
+		};
+	}
+
+	static List<UnsourcedRequestCookie> BuildUnsourcedRequestCookies(
+		Session targetSession,
+		IReadOnlyList<Session> previousSessions
+	) {
+		var unsourced = new List<UnsourcedRequestCookie>();
+
+		foreach (var cookie in targetSession.Request.Cookies.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)) {
+			if (string.IsNullOrWhiteSpace(cookie.Key) || string.IsNullOrWhiteSpace(cookie.Value))
+				continue;
+
+			if (HasCookieSource(previousSessions, cookie.Key, cookie.Value))
+				continue;
+
+			unsourced.Add(new UnsourcedRequestCookie(cookie.Key, cookie.Value));
+		}
+
+		return unsourced;
+	}
+
+	static bool HasCookieSource(IReadOnlyList<Session> previousSessions, string cookieName, string cookieValue) {
+		var pairNeedle = $"{cookieName}={cookieValue}";
+		if (GetOrderedSources(previousSessions, pairNeedle).Count > 0)
+			return true;
+
+		if (GetOrderedSources(previousSessions, cookieValue).Count > 0)
+			return true;
+
+		return false;
 	}
 
 	static List<RequestSourceFinding> BuildRequestSourceFindings(
@@ -153,10 +212,14 @@ internal static class SourceReportBuilder {
 	}
 
 	static string RegisterMissingValue(Dictionary<string, string> missing, string preferredKey, string value) {
+		return RegisterDictionaryValue(missing, preferredKey, value);
+	}
+
+	static string RegisterDictionaryValue(Dictionary<string, string> dictionary, string preferredKey, string value) {
 		var baseKey = string.IsNullOrWhiteSpace(preferredKey) ? "{value}" : preferredKey;
 
-		if (!missing.TryGetValue(baseKey, out var existingValue)) {
-			missing[baseKey] = value;
+		if (!dictionary.TryGetValue(baseKey, out var existingValue)) {
+			dictionary[baseKey] = value;
 			return baseKey;
 		}
 
@@ -166,8 +229,8 @@ internal static class SourceReportBuilder {
 		var suffix = 1;
 		while (true) {
 			var collisionKey = AppendCollisionSuffix(baseKey, suffix);
-			if (!missing.TryGetValue(collisionKey, out existingValue)) {
-				missing[collisionKey] = value;
+			if (!dictionary.TryGetValue(collisionKey, out existingValue)) {
+				dictionary[collisionKey] = value;
 				return collisionKey;
 			}
 

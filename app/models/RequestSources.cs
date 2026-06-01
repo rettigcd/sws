@@ -12,6 +12,7 @@ internal sealed record RequestSources(
 internal sealed record SessionSourcesBatchReport(
 	string SourceBasePath,
 	Dictionary<string, string> Missing,
+	Dictionary<string, string> UnsourcedCookies,
 	List<RequestSources> Mappings
 );
 
@@ -33,4 +34,9 @@ internal enum RequestSourcePieceKind {
 
 internal sealed record MissingSourceReference(
 	string MissingKey
+);
+
+internal sealed record UnsourcedRequestCookie(
+	string Name,
+	string Value
 );
