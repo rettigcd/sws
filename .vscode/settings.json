@@ -6,7 +6,8 @@
 		"activityBar.foreground": "#ffffff",
 		"activityBar.activeBorder": "#ffffff",
 		"activityBar.inactiveForeground": "#000000",
-		"titleBar.activeBackground": "#e67ca5"
+		"titleBar.activeBackground": "#e67ca5",
+		"titleBar.inactiveBackground":"#e67ca5"
 	},
 
 	// Tab / indents
