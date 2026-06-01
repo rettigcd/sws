@@ -25,7 +25,9 @@ internal sealed class RequestPlan {
 	public IReadOnlyDictionary<string, string> Headers { get; }
 	public IReadOnlyDictionary<string, string> Cookies { get; }
 	public Body Body { get; }
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 	public JsonElement? JsonBody { get; }
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 	public IReadOnlyList<FormBodyEntry>? FormBody { get; }
 
 	public RequestPlan(Request request) {
@@ -34,7 +36,7 @@ internal sealed class RequestPlan {
 		QueryParameters = BuildQueryParameterPlaceholders(request.QueryParameters);
 
 		Version = ParseHttpVersion(request.Version);
-		Headers = new Dictionary<string, string>(request.Headers, StringComparer.OrdinalIgnoreCase);
+		Headers = ChromeHeadersEngine.BuildHeaderOverrides(request.Headers);
 		Cookies = new Dictionary<string, string>(request.Cookies, StringComparer.OrdinalIgnoreCase);
 		Body = request.Body;
 		JsonBody = request.JsonBody is JsonElement jsonBody
@@ -133,24 +135,51 @@ internal sealed class RequestPlan {
 	}
 
 	void ApplyHeaders(HttpRequestMessage message) {
+		SetDefaultHostHeader(message);
+
+		var generatedHeaders = ChromeHeadersEngine.BuildHeaders(Method, message.RequestUri);
+		foreach (var generatedHeader in generatedHeaders)
+			SetHeader(message, generatedHeader.Key, generatedHeader.Value);
+
 		foreach (var header in Headers) {
-			if (string.Equals(header.Key, "Host", StringComparison.OrdinalIgnoreCase)) {
-				message.Headers.Host = header.Value;
-				continue;
-			}
-
-			if (string.Equals(header.Key, "Cookie", StringComparison.OrdinalIgnoreCase))
-				continue;
-
-			if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase)) {
-				if (message.Content is not null && MediaTypeHeaderValue.TryParse(header.Value, out var mediaType))
-					message.Content.Headers.ContentType = mediaType;
-				continue;
-			}
-
-			if (!message.Headers.TryAddWithoutValidation(header.Key, header.Value))
-				message.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value);
+			SetHeader(message, header.Key, header.Value);
 		}
+	}
+
+	static void SetDefaultHostHeader(HttpRequestMessage message) {
+		var requestUri = message.RequestUri;
+		if (requestUri is null)
+			return;
+
+		var host = requestUri.IdnHost;
+		if (requestUri.HostNameType == UriHostNameType.IPv6)
+			host = $"[{host}]";
+
+		message.Headers.Host = requestUri.IsDefaultPort
+			? host
+			: $"{host}:{requestUri.Port}";
+	}
+
+	static void SetHeader(HttpRequestMessage message, string key, string value) {
+		if (string.Equals(key, "Host", StringComparison.OrdinalIgnoreCase)) {
+			message.Headers.Host = value;
+			return;
+		}
+
+		if (string.Equals(key, "Cookie", StringComparison.OrdinalIgnoreCase))
+			return;
+
+		if (string.Equals(key, "Content-Type", StringComparison.OrdinalIgnoreCase)) {
+			if (message.Content is not null && MediaTypeHeaderValue.TryParse(value, out var mediaType))
+				message.Content.Headers.ContentType = mediaType;
+			return;
+		}
+
+		message.Headers.Remove(key);
+		message.Content?.Headers.Remove(key);
+
+		if (!message.Headers.TryAddWithoutValidation(key, value))
+			message.Content?.Headers.TryAddWithoutValidation(key, value);
 	}
 
 	void ApplyCookies(HttpRequestMessage message) {

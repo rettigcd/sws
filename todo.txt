@@ -15,3 +15,35 @@ Detect microsofts B2C authentication and auto-map {client-request-id} to NEW GUI
 Auto-map nonce to to a GUID
 
 Figure out how 1TRAX is generating state and auto-map it too (for B2C)
+
+
+
+==== Ride-along headers ====
+
+---- Application Insights: ----
+==> should be able to exclude BUT
+==> cookie COULD be used for bot detection if it were missing. (possible but unusual)
+ai_session
+ai_user
+
+---- Google Analytics ----
+==> should be able to exclude BUT
+==> cookie COULD be used for bot detection if it were missing. (possible but unusual)
+"_ga": "GA1.1.1913137376.1779984169",
+"_ga_X507VFZ3SP": "...",
+"_ga_X507VFZ3SP_1": "...",
+"_ga_X507VFZ3SP_2": "..."
+
+---- OneTrust cookie consent management ----
+==> likely to break thing if missing.
+"OptanonAlertBoxClosed": "2026-05-28T16:02:52.476Z",
+"OptanonConsent": "...",
+"OptanonConsent_1": "...",
+"OptanonConsent_2": "...",
+
+---- B2C cookies ----
+==> WILL break thing if missing.
+"x-ms-cpim-sso:tqlidentitystage.onmicrosoft.com/b2c_1a_signup_signin_passwordreset_0": "...",
+"x-ms-cpim-sso:tqlidentitystage.onmicrosoft.com/b2c_1a_signup_signin_passwordreset_0_1": "...",
+
+

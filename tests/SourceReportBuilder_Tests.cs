@@ -69,6 +69,30 @@ public class SourceReportBuilder_Tests {
 		report.RequestPlan.Headers.ContainsKey("Cookie").ShouldBeFalse();
 	}
 
+	[Fact]
+	public void BuildSessionSourcesReport_DoesNotFlagAzureB2CCookiesAsUnsourced() {
+		var b2cSession = BuildSession(
+			sessionId: 3,
+			url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code",
+			requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+				["x-ms-cpim-csrf"] = "csrf-token",
+			},
+			responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+		);
+
+		var unsourcedCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+		var report = SourceReportBuilder.BuildSessionSourcesReport(
+			sessionIndex: 0,
+			sessions: [b2cSession],
+			missing: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+			unsourcedCookies: unsourcedCookies
+		);
+
+		unsourcedCookies.Count.ShouldBe(0);
+		report.RequestPlan.Cookies.Count.ShouldBe(0);
+	}
+
 	static Session BuildSession(
 		int sessionId,
 		string url,

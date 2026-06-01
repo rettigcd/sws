@@ -18,6 +18,11 @@ internal static class SourceReportBuilder {
 		"client-request-id",
 	];
 
+	static readonly string[] AzureB2cCookiePrefixes =
+	[
+		"x-ms-cpim-",
+	];
+
 	public static AzureB2cSourceContext BuildAzureB2cSourceContext(IReadOnlyList<Session> sessions) {
 		var flowSessionIds = AzureB2cAuthenticationScanner
 			.Scan(sessions)
@@ -39,7 +44,7 @@ internal static class SourceReportBuilder {
 		var previousSessions = sessions.Take(sessionIndex).ToList();
 		azureB2cSourceContext ??= BuildAzureB2cSourceContext(sessions);
 		var isAzureB2cFlowSession = azureB2cSourceContext.FlowSessionIds.Contains(targetSession.SessionId);
-		var unsourcedCookieList = BuildUnsourcedRequestCookies(targetSession, previousSessions);
+		var unsourcedCookieList = BuildUnsourcedRequestCookies(targetSession, previousSessions, isAzureB2cFlowSession);
 		RegisterUnsourcedCookies(unsourcedCookies, unsourcedCookieList);
 		var requestForPlan = BuildRequestForCookieJar(targetSession.Request, unsourcedCookieList);
 		var requestPlan = new RequestPlan(requestForPlan);
@@ -82,12 +87,16 @@ internal static class SourceReportBuilder {
 
 	static List<UnsourcedRequestCookie> BuildUnsourcedRequestCookies(
 		Session targetSession,
-		IReadOnlyList<Session> previousSessions
+		IReadOnlyList<Session> previousSessions,
+		bool isAzureB2cFlowSession
 	) {
 		var unsourced = new List<UnsourcedRequestCookie>();
 
 		foreach (var cookie in targetSession.Request.Cookies.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)) {
 			if (string.IsNullOrWhiteSpace(cookie.Key) || string.IsNullOrWhiteSpace(cookie.Value))
+				continue;
+
+			if (isAzureB2cFlowSession && IsAzureB2cFlowCookie(cookie.Key))
 				continue;
 
 			if (HasCookieSource(previousSessions, cookie.Key, cookie.Value))
@@ -97,6 +106,14 @@ internal static class SourceReportBuilder {
 		}
 
 		return unsourced;
+	}
+
+	static bool IsAzureB2cFlowCookie(string cookieName) {
+		foreach (var prefix in AzureB2cCookiePrefixes)
+			if (cookieName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+				return true;
+
+		return false;
 	}
 
 	static bool HasCookieSource(IReadOnlyList<Session> previousSessions, string cookieName, string cookieValue) {
