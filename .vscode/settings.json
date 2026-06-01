@@ -1,2 +1,22 @@
 {
+	// Appearance - easy to identify this Workspace
+	"workbench.colorCustomizations": {
+		// Activty bar (left icons)
+		"activityBar.background": "#e67ca5",
+		"activityBar.foreground": "#ffffff",
+		"activityBar.activeBorder": "#ffffff",
+		"activityBar.inactiveForeground": "#000000",
+		"titleBar.activeBackground": "#e67ca5"
+	},
+
+	// Tab / indents
+	"editor.insertSpaces": false,
+	"editor.tabSize": 4,
+
+	// Typescript
+	"js/ts.tsdk.path": "node_modules\\typescript\\lib", // use project's local TypeScript version
+	"js/ts.tsdk.promptToUseWorkspaceVersion": true,
+	"editor.codeActionsOnSave": {
+		"source.organizeImports": "explicit"
+	},
 }
