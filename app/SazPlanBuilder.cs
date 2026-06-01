@@ -131,14 +131,20 @@ internal static class SazPlanBuilder {
 
 		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		var unsourcedCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		var azureB2cSourceContext = SourceReportBuilder.BuildAzureB2cSourceContext(sessions);
+		var mappings = sessions
+			.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, sessions, missing, unsourcedCookies, azureB2cSourceContext))
+			.ToList();
+
+		var sortedUnsourcedCookies = unsourcedCookies
+			.OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+			.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
 
 		var report = new SessionSourcesBatchReport(
 			Path.GetFullPath(outputBasePath),
 			missing,
-			unsourcedCookies,
-			sessions
-				.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, sessions, missing, unsourcedCookies))
-				.ToList()
+			sortedUnsourcedCookies,
+			mappings
 		);
 
 		File.WriteAllText(outputPath, JsonSerializer.Serialize(report, options), Encoding.UTF8);

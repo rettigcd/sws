@@ -5,6 +5,31 @@ using Xunit;
 
 public class SourceReportBuilder_Tests {
 	[Fact]
+	public void BuildSessionSourcesReport_UsesAzureB2CSourceReference_ForB2CFlowValues() {
+		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		var challenge = "xqztrplkmnsvwbcdfghjklmn123456";
+
+		var b2cSession = BuildSession(
+			sessionId: 101,
+			url: $"https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=app-client&code_challenge={challenge}&response_type=code",
+			requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+			responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+		);
+
+		var report = SourceReportBuilder.BuildSessionSourcesReport(
+			sessionIndex: 0,
+			sessions: [b2cSession],
+			missing: missing,
+			unsourcedCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+		);
+
+		var replacement = report.RequestPlan.Replacements.Values.FirstOrDefault(r => r.Placeholder.StartsWith("{code_challenge", StringComparison.OrdinalIgnoreCase));
+		replacement.ShouldNotBeNull();
+		replacement.Source.ShouldBe("{AzureB2C:code_challenge}");
+		missing.ContainsKey(replacement.Placeholder).ShouldBeFalse();
+	}
+
+	[Fact]
 	public void BuildSessionSourcesReport_FlagsUnsourcedRequestCookies() {
 		var sourcedCookieValue = "abc123";
 		var previousSession = BuildSession(
@@ -50,14 +75,17 @@ public class SourceReportBuilder_Tests {
 		Dictionary<string, string> requestCookies,
 		Dictionary<string, string> responseHeaders
 	) {
+		var uri = new Uri(url);
+		var queryParameters = ParseQueryParameters(uri);
+
 		var request = new Request(
 			$"GET {url} HTTP/1.1",
 			"GET",
 			url,
 			"HTTP/1.1",
 			url,
-			new Uri(url).Host,
-			new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+			uri.Host,
+			queryParameters,
 			new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			requestCookies,
 			new List<string>(),
@@ -79,5 +107,22 @@ public class SourceReportBuilder_Tests {
 		);
 
 		return new Session(sessionId, null, request, response);
+	}
+
+	static Dictionary<string, string> ParseQueryParameters(Uri uri) {
+		var query = uri.Query;
+		var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		if (string.IsNullOrWhiteSpace(query) || query == "?")
+			return parameters;
+
+		foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+			var split = pair.Split('=', 2);
+			var key = Uri.UnescapeDataString(split[0]);
+			var value = split.Length > 1 ? Uri.UnescapeDataString(split[1]) : string.Empty;
+			if (!string.IsNullOrWhiteSpace(key))
+				parameters[key] = value;
+		}
+
+		return parameters;
 	}
 }
