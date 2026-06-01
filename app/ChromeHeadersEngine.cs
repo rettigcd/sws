@@ -30,15 +30,9 @@ internal static class ChromeHeadersEngine {
 	}
 
 	public static Dictionary<string, string> BuildHeaderOverrides(IReadOnlyDictionary<string, string> capturedHeaders) {
-		var overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		foreach (var header in capturedHeaders) {
-			if (IsEngineManagedHeader(header.Key))
-				continue;
-
-			overrides[header.Key] = header.Value;
-		}
-
-		return overrides;
+		return capturedHeaders
+			.Where(header => !IsEngineManagedHeader(header.Key))
+			.ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
 	}
 
 	public static Dictionary<string, string> BuildHeaders(string method, Uri? requestUri) {

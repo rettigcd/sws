@@ -1,28 +1,6 @@
 using System.Text.Json;
 
 internal static class SourceReportBuilder {
-	static readonly HashSet<string> AzureB2cFlowValueKeys =
-	[
-		"client_id",
-		"redirect_uri",
-		"code_challenge",
-		"code_verifier",
-		"nonce",
-		"state",
-		"grant_type",
-		"response_type",
-		"response_mode",
-		"scope",
-		"prompt",
-		"login_hint",
-		"client-request-id",
-	];
-
-	static readonly string[] AzureB2cCookiePrefixes =
-	[
-		"x-ms-cpim-",
-	];
-
 	public static AzureB2cSourceContext BuildAzureB2cSourceContext(IReadOnlyList<Session> sessions) {
 		var flowSessionIds = AzureB2cAuthenticationScanner
 			.Scan(sessions)
@@ -44,11 +22,23 @@ internal static class SourceReportBuilder {
 		var previousSessions = sessions.Take(sessionIndex).ToList();
 		azureB2cSourceContext ??= BuildAzureB2cSourceContext(sessions);
 		var isAzureB2cFlowSession = azureB2cSourceContext.FlowSessionIds.Contains(targetSession.SessionId);
-		var unsourcedCookieList = BuildUnsourcedRequestCookies(targetSession, previousSessions, isAzureB2cFlowSession);
-		RegisterUnsourcedCookies(unsourcedCookies, unsourcedCookieList);
-		var requestForPlan = BuildRequestForCookieJar(targetSession.Request, unsourcedCookieList);
+		var unsourcedCookieList = CookieSourceService.BuildUnsourcedRequestCookies(
+			targetSession,
+			previousSessions,
+			isAzureB2cFlowSession,
+			GetOrderedSources
+		);
+		CookieSourceService.RegisterUnsourcedCookies(unsourcedCookies, unsourcedCookieList, RegisterDictionaryValue);
+		var requestForPlan = CookieSourceService.BuildRequestForCookieJar(targetSession.Request, unsourcedCookieList);
 		var requestPlan = new RequestPlan(requestForPlan);
-		PopulateReplacementSources(requestPlan, previousSessions, missing, isAzureB2cFlowSession);
+		ReplacementSourceResolver.PopulateReplacementSources(
+			requestPlan,
+			previousSessions,
+			missing,
+			isAzureB2cFlowSession,
+			GetOrderedSources,
+			RegisterMissingValue
+		);
 
 		return new RequestSources(
 			sessionIndex,
@@ -58,73 +48,6 @@ internal static class SourceReportBuilder {
 			requestPlan,
 			null
 		);
-	}
-
-	static void RegisterUnsourcedCookies(
-		Dictionary<string, string>? unsourcedCookieDictionary,
-		IReadOnlyList<UnsourcedRequestCookie> unsourcedCookies
-	) {
-		if (unsourcedCookieDictionary is null || unsourcedCookies.Count == 0)
-			return;
-
-		foreach (var unsourcedCookie in unsourcedCookies)
-			RegisterDictionaryValue(unsourcedCookieDictionary, unsourcedCookie.Name, unsourcedCookie.Value);
-	}
-
-	static Request BuildRequestForCookieJar(Request original, IReadOnlyList<UnsourcedRequestCookie> unsourcedCookies) {
-		var filteredCookies = unsourcedCookies
-			.ToDictionary(cookie => cookie.Name, cookie => cookie.Value, StringComparer.OrdinalIgnoreCase);
-
-		var filteredHeaders = original.Headers
-			.Where(header => !string.Equals(header.Key, "Cookie", StringComparison.OrdinalIgnoreCase))
-			.ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase);
-
-		return original with {
-			Cookies = filteredCookies,
-			Headers = filteredHeaders,
-		};
-	}
-
-	static List<UnsourcedRequestCookie> BuildUnsourcedRequestCookies(
-		Session targetSession,
-		IReadOnlyList<Session> previousSessions,
-		bool isAzureB2cFlowSession
-	) {
-		var unsourced = new List<UnsourcedRequestCookie>();
-
-		foreach (var cookie in targetSession.Request.Cookies.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)) {
-			if (string.IsNullOrWhiteSpace(cookie.Key) || string.IsNullOrWhiteSpace(cookie.Value))
-				continue;
-
-			if (isAzureB2cFlowSession && IsAzureB2cFlowCookie(cookie.Key))
-				continue;
-
-			if (HasCookieSource(previousSessions, cookie.Key, cookie.Value))
-				continue;
-
-			unsourced.Add(new UnsourcedRequestCookie(cookie.Key, cookie.Value));
-		}
-
-		return unsourced;
-	}
-
-	static bool IsAzureB2cFlowCookie(string cookieName) {
-		foreach (var prefix in AzureB2cCookiePrefixes)
-			if (cookieName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-				return true;
-
-		return false;
-	}
-
-	static bool HasCookieSource(IReadOnlyList<Session> previousSessions, string cookieName, string cookieValue) {
-		var pairNeedle = $"{cookieName}={cookieValue}";
-		if (GetOrderedSources(previousSessions, pairNeedle).Count > 0)
-			return true;
-
-		if (GetOrderedSources(previousSessions, cookieValue).Count > 0)
-			return true;
-
-		return false;
 	}
 
 	static List<RequestSourceFinding> BuildRequestSourceFindings(
@@ -148,37 +71,16 @@ internal static class SourceReportBuilder {
 		}
 
 		var isAzureB2cFlowSession = BuildAzureB2cSourceContext(sessions).FlowSessionIds.Contains(targetSession.SessionId);
-		PopulateReplacementSources(requestPlan, previousSessions, missing, isAzureB2cFlowSession);
+		ReplacementSourceResolver.PopulateReplacementSources(
+			requestPlan,
+			previousSessions,
+			missing,
+			isAzureB2cFlowSession,
+			GetOrderedSources,
+			RegisterMissingValue
+		);
 
 		return findings;
-	}
-
-	static void PopulateReplacementSources(
-		RequestPlan requestPlan,
-		IReadOnlyList<Session> previousSessions,
-		Dictionary<string, string>? missing,
-		bool isAzureB2cFlowSession
-	) {
-		foreach (var replacement in requestPlan.Replacements.Values) {
-			var orderedSources = GetOrderedSources(previousSessions, replacement.OriginalValue);
-			var source = orderedSources.FirstOrDefault();
-			if (source is not null) {
-				replacement.Source = source;
-				continue;
-			}
-
-			if (isAzureB2cFlowSession && TryBuildAzureB2cSourceReference(replacement.Placeholder, out var azureB2cSource)) {
-				replacement.Source = azureB2cSource;
-				continue;
-			}
-
-			var missingKey = replacement.Placeholder;
-			if (missing is not null) {
-				missingKey = RegisterMissingValue(missing, replacement.Placeholder, replacement.OriginalValue);
-			}
-
-			replacement.Source = new MissingSourceReference(missingKey);
-		}
 	}
 
 	static List<RequestSourceFinding> BuildPathSourceFindings(
@@ -257,38 +159,6 @@ internal static class SourceReportBuilder {
 		}
 
 		return new RequestSourceFinding(piece, new MissingSourceReference(preferredKey));
-	}
-
-	static bool TryBuildAzureB2cSourceReference(string placeholder, out string sourceReference) {
-		sourceReference = string.Empty;
-		if (string.IsNullOrWhiteSpace(placeholder))
-			return false;
-
-		var trimmed = placeholder.Trim();
-		if (trimmed.StartsWith("{", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal) && trimmed.Length > 2)
-			trimmed = trimmed[1..^1];
-
-		if (trimmed.Length == 0)
-			return false;
-
-		var key = StripNumericSuffix(trimmed);
-		if (!AzureB2cFlowValueKeys.Contains(key))
-			return false;
-
-		sourceReference = $"{{AzureB2C:{key}}}";
-		return true;
-	}
-
-	static string StripNumericSuffix(string value) {
-		var lastUnderscore = value.LastIndexOf('_');
-		if (lastUnderscore <= 0 || lastUnderscore >= value.Length - 1)
-			return value;
-
-		for (var i = lastUnderscore + 1; i < value.Length; i++)
-			if (!char.IsDigit(value[i]))
-				return value;
-
-		return value[..lastUnderscore];
 	}
 
 	static string BuildPlaceholderName(RequestPiece piece) {
