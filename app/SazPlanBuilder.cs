@@ -1,14 +1,9 @@
 using System.Globalization;
-using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
-using System.Xml.Linq;
 
 internal static class SazPlanBuilder {
-	private static readonly object MalformedMetadataLogLock = new();
-	private static readonly string MalformedMetadataLogPath = Path.Combine(Environment.CurrentDirectory, "malformed-metadata.log");
 	private static readonly HashSet<string> MediaPathExtensions =
 	[
 		".png",
@@ -35,11 +30,6 @@ internal static class SazPlanBuilder {
 		".eot",
 	];
 	
-	static readonly Regex RawFilePattern = new(
-		@"^raw\/(?<id>\d+)_(?<kind>[csm])\.(?<ext>txt|xml)$", 
-		RegexOptions.Compiled | RegexOptions.IgnoreCase
-	);
-	
 	static readonly HashSet<string> DynamicHeaderNames =
 	[
 		"content-length",
@@ -62,7 +52,7 @@ internal static class SazPlanBuilder {
 		string sazPath,
 		SazBuildOptions options
 	) {
-		var map = LoadSessionRawMap(sazPath);
+		var map = SazArchiveReader.LoadSessionRawMap(sazPath);
 
 		var sessions = map
 			.OrderBy(kvp => kvp.Key)
@@ -85,39 +75,6 @@ internal static class SazPlanBuilder {
 			globalHeaders,
 			sessionsWithoutGlobalHeaders
 		);
-	}
-
-	static Dictionary<int, SessionRaw> LoadSessionRawMap(string sazPath) {
-		using var stream = File.OpenRead(sazPath);
-		using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
-
-		var map = new Dictionary<int, SessionRaw>();
-		foreach (var entry in archive.Entries) {
-			var match = RawFilePattern.Match(entry.FullName);
-			if (!match.Success)
-				continue;
-
-			var id = int.Parse(match.Groups["id"].Value, CultureInfo.InvariantCulture);
-			var kind = match.Groups["kind"].Value.ToLowerInvariant();
-
-			if (!map.TryGetValue(id, out var sessionRaw)) {
-				sessionRaw = new SessionRaw(id);
-				map[id] = sessionRaw;
-			}
-
-			using var entryStream = entry.Open();
-			using var memory = new MemoryStream();
-			entryStream.CopyTo(memory);
-			var bytes = memory.ToArray();
-
-			switch (kind) {
-				case "c":	sessionRaw.ClientRequestBytes = bytes;	break;
-				case "s":	sessionRaw.ServerResponseBytes = bytes;	break;
-				case "m":	sessionRaw.MetadataBytes = bytes;		break;
-			}
-		}
-
-		return map;
 	}
 
 	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<Session> sessions) {
@@ -288,9 +245,9 @@ internal static class SazPlanBuilder {
 	}
 
 	static Session BuildSessionPlan(SessionRaw raw, bool includeMetadata) {
-		var metadata = includeMetadata ? ParseMetadata(raw.MetadataBytes, raw.Id) : null;
-		var request = ParseHttpMessage(raw.ClientRequestBytes, isRequest: true);
-		var response = ParseHttpMessage(raw.ServerResponseBytes, isRequest: false);
+		var metadata = includeMetadata ? SazMetadataParser.Parse(raw.MetadataBytes, raw.Id) : null;
+		var request = SazHttpMessageParser.Parse(raw.ClientRequestBytes, isRequest: true);
+		var response = SazHttpMessageParser.Parse(raw.ServerResponseBytes, isRequest: false);
 
 		var requestLine = ParseRequestLine(request.StartLine);
 		var statusLine = ParseStatusLine(response.StartLine);
@@ -350,151 +307,6 @@ internal static class SazPlanBuilder {
 			requestPlan,
 			responsePlan
 		);
-	}
-
-	static Metadata ParseMetadata(byte[]? metadataBytes, int sessionId) {
-		if (metadataBytes is null || metadataBytes.Length == 0)
-			return new Metadata(new Dictionary<string, string>(), new Dictionary<string, string>());
-
-		var flags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		var timers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-		XDocument doc;
-		try {
-			using var stream = new MemoryStream(metadataBytes);
-			doc = XDocument.Load(stream, LoadOptions.None);
-		}
-		catch (Exception ex) {
-			LogMalformedMetadata(sessionId, metadataBytes, ex);
-			return new Metadata(flags, timers);
-		}
-
-		foreach (var flag in doc.Descendants("SessionFlag")) {
-			var key = flag.Attribute("N")?.Value;
-			var value = flag.Attribute("V")?.Value;
-			if (!string.IsNullOrWhiteSpace(key) && value is not null)
-				flags[key] = value;
-		}
-
-		var timersElement = doc.Descendants("SessionTimers").FirstOrDefault();
-		if (timersElement is not null)
-			foreach (var attr in timersElement.Attributes())
-				timers[attr.Name.LocalName] = attr.Value;
-
-		return new Metadata(flags, timers);
-	}
-
-	static void LogMalformedMetadata(int sessionId, byte[] metadataBytes, Exception ex) {
-		var utc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
-		var utf8 = Encoding.UTF8.GetString(metadataBytes);
-		var latin1 = Encoding.Latin1.GetString(metadataBytes);
-		var base64 = Convert.ToBase64String(metadataBytes);
-
-		var entry = $"[{utc}] Session {sessionId} malformed metadata. "
-			+ $"Length={metadataBytes.Length}. Error={ex.GetType().Name}: {ex.Message}{Environment.NewLine}"
-			+ $"UTF8:{Environment.NewLine}{utf8}{Environment.NewLine}" 
-			+ $"Latin1:{Environment.NewLine}{latin1}{Environment.NewLine}"
-			+ $"Base64:{Environment.NewLine}{base64}{Environment.NewLine}"
-			+ $"{new string('-', 80)}{Environment.NewLine}";
-
-		lock (MalformedMetadataLogLock) {
-			File.AppendAllText(MalformedMetadataLogPath, entry, Encoding.UTF8);
-		}
-	}
-
-	// splits the rawBytes of a request or response into headers and body-bytes
-	static HttpMessageParts ParseHttpMessage(byte[]? rawBytes, bool isRequest) {
-		if (rawBytes is null || rawBytes.Length == 0)
-			return new HttpMessageParts(string.Empty, new Dictionary<string, string>(), Array.Empty<byte>());
-
-		(byte[] headerBytes, byte[] bodyBytes) = FindHeaderBodySeparator(rawBytes);
-
-		string headerText = Encoding.Latin1.GetString(headerBytes);
-		string[] lines = headerText.Split(["\r\n", "\n"], StringSplitOptions.None);
-		string startLine = lines.FirstOrDefault() ?? string.Empty;
-
-		Dictionary<string, string> headers = ParseHeaders(lines.Skip(1));
-
-		if (isRequest && !headers.ContainsKey("Host") && startLine.StartsWith("CONNECT ", StringComparison.OrdinalIgnoreCase)) {
-			string? target = startLine.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault();
-			if (!string.IsNullOrWhiteSpace(target))
-				headers["Host"] = target;
-		}
-
-		return new HttpMessageParts(startLine, headers, bodyBytes);
-	}
-
-	static (byte[] headerBytes, byte[] bodyBytes) FindHeaderBodySeparator(byte[] rawBytes) {
-		var crlf = new byte[] { 13, 10, 13, 10 };
-		var lf = new byte[] { 10, 10 };
-
-		var idx = IndexOf(rawBytes, crlf);
-		if (idx >= 0) {
-			return (
-				rawBytes[..idx],
-				rawBytes[(idx + crlf.Length)..]
-			);
-		}
-
-		idx = IndexOf(rawBytes, lf);
-		if (idx >= 0) {
-			return (
-				rawBytes[..idx],
-				rawBytes[(idx + lf.Length)..]
-			);
-		}
-
-		return (rawBytes, Array.Empty<byte>());
-	}
-
-	static int IndexOf(byte[] data, byte[] marker) {
-		if (marker.Length == 0 || data.Length < marker.Length)
-			return -1;
-
-
-		for (var i = 0; i <= data.Length - marker.Length; i++) {
-			var matched = true;
-			for (var j = 0; j < marker.Length; j++) {
-				if (data[i + j] != marker[j]) {
-					matched = false;
-					break;
-				}
-			}
-
-			if (matched)
-				return i;
-		}
-
-		return -1;
-	}
-
-	static Dictionary<string, string> ParseHeaders(IEnumerable<string> headerLines) {
-		var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		string? currentHeader = null;
-
-		foreach (var rawLine in headerLines) {
-			if (string.IsNullOrEmpty(rawLine))
-				continue;
-
-			if ((rawLine.StartsWith(' ') || rawLine.StartsWith('\t')) && currentHeader is not null) {
-				headers[currentHeader] = headers[currentHeader] + " " + rawLine.Trim();
-				continue;
-			}
-
-			var idx = rawLine.IndexOf(':');
-			if (idx <= 0)
-				continue;
-
-			var name = rawLine[..idx].Trim();
-			var value = rawLine[(idx + 1)..].Trim();
-			if (name.Length == 0)
-				continue;
-
-			currentHeader = name;
-			headers[name] = value;
-		}
-
-		return headers;
 	}
 
 	static RequestLineParts ParseRequestLine(string startLine) {
