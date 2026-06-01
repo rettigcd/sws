@@ -63,8 +63,10 @@ for (var i = 1; i < args.Length; i++) {
 try {
 	var plan = SazPlanBuilder.Build(inputPath, buildOptions);
 	var planOutputPath = ResolveOutputPath(inputPath, outputPath);
+	var b2cOutputPath = Path.ChangeExtension(planOutputPath, ".b2c.json");
 
 	WriteSazPlanAsJson(planOutputPath, pretty, plan);
+	WriteAzureB2cReportAsJson(b2cOutputPath, pretty, AzureB2cAuthenticationScanner.Scan(plan.Sessions));
 
 	if (sourcesAll) {
 		SazPlanBuilder.WriteAllSessionSourcesReport(planOutputPath, plan.Sessions);
@@ -96,6 +98,17 @@ static string ResolveOutputPath(string inputPath, string? outputPath) {
 
 static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
 	var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions {
+		WriteIndented = pretty,
+		IndentCharacter = '\t',
+		IndentSize = 1,
+		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+	});
+
+	File.WriteAllText(outputPath, json, Encoding.UTF8);
+}
+
+static void WriteAzureB2cReportAsJson(string outputPath, bool pretty, AzureB2cAuthenticationReport report) {
+	var json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
 		WriteIndented = pretty,
 		IndentCharacter = '\t',
 		IndentSize = 1,

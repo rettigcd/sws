@@ -25,12 +25,18 @@ dotnet build
 dotnet run -- <path-to-capture.saz> --out plan.json
 ```
 
+This produces:
+
+- `<name>.plan.json` request/response plan
+- `<name>.plan.b2c.json` Azure B2C authentication flow scan report
+- `<name>.plan.sources.json` when `--sources-all` is provided
+
 Options:
 
 - `--out <file>`: write JSON to file (otherwise prints to stdout)
 - default output is indented JSON
 - `--compact`: compact JSON output
-- `--sources-all`: write-out a plan for obtaining the substrings used in the requests
+- `--sources-all`: write an additional `<name>.plan.sources.json` source mapping report
 
 ## Example
 
