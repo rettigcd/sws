@@ -4,8 +4,8 @@ internal static class SourceReportBuilder {
 	public static AzureB2cSourceContext BuildAzureB2cSourceContext(IReadOnlyList<Session> sessions) {
 		var flowSessionIds = AzureB2cAuthenticationScanner
 			.Scan(sessions)
-			.Flows
-			.SelectMany(flow => flow.SessionIds)
+			.Requests
+			.Select(request => request.SessionId)
 			.ToHashSet();
 
 		return new AzureB2cSourceContext(flowSessionIds);
@@ -39,12 +39,14 @@ internal static class SourceReportBuilder {
 			GetOrderedSources,
 			RegisterMissingValue
 		);
+		var requestType = AzureB2cAuthenticationScanner.ClassifySession(targetSession, previousSessions);
 
 		return new RequestSources(
 			sessionIndex,
 			targetSession.SessionId,
 			targetSession.Request.Method,
 			targetSession.Request.Url,
+			requestType,
 			requestPlan,
 			null
 		);

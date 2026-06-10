@@ -21,7 +21,6 @@ if (!string.Equals(Path.GetExtension(inputPath), ".saz", StringComparison.Ordina
 
 string? outputPath = null;
 bool pretty = true;
-bool sourcesAll = false;
 SazBuildOptions buildOptions = new ();
 
 for (var i = 1; i < args.Length; i++) {
@@ -52,7 +51,7 @@ for (var i = 1; i < args.Length; i++) {
 		buildOptions.IncludeSourcemaps = true;
 	}
 	else if (arg is "--sources-all") {
-		sourcesAll = true;
+		// Deprecated: sources report is now always generated.
 	}
 	else {
 		Console.Error.WriteLine($"Unknown argument: {arg}");
@@ -62,15 +61,14 @@ for (var i = 1; i < args.Length; i++) {
 
 try {
 	var plan = SazPlanBuilder.Build(inputPath, buildOptions);
+	var classifiedSessions = AzureB2cAuthenticationScanner.ClassifyUnknownSessions(plan.Sessions).ToList();
+	var classifiedPlan = plan with { Sessions = classifiedSessions };
 	var planOutputPath = ResolveOutputPath(inputPath, outputPath);
 	var b2cOutputPath = Path.ChangeExtension(planOutputPath, ".b2c.json");
 
-	WriteSazPlanAsJson(planOutputPath, pretty, plan);
-	WriteAzureB2cReportAsJson(b2cOutputPath, pretty, AzureB2cAuthenticationScanner.Scan(plan.Sessions));
-
-	if (sourcesAll) {
-		SazPlanBuilder.WriteAllSessionSourcesReport(planOutputPath, plan.Sessions);
-	}
+	WriteSazPlanAsJson(planOutputPath, pretty, classifiedPlan);
+	WriteAzureB2cReportAsJson(b2cOutputPath, pretty, AzureB2cAuthenticationScanner.Scan(classifiedSessions));
+	SazPlanBuilder.WriteAllSessionSourcesReport(planOutputPath, classifiedSessions);
 
 	return 0;
 }
@@ -81,7 +79,7 @@ catch (Exception ex) {
 
 static void PrintUsage() {
 	Console.WriteLine("Usage:");
-	Console.WriteLine("  sws <input.saz> [--out plan.json] [--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps] [--sources-all]");
+	Console.WriteLine("  sws <input.saz> [--out plan.json] [--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps]");
 }
 
 static string ResolveOutputPath(string inputPath, string? outputPath) {

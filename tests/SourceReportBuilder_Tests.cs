@@ -1,5 +1,6 @@
 namespace sws.Tests;
 
+using System.Text.Json;
 using Shouldly;
 using Xunit;
 
@@ -26,6 +27,7 @@ public class SourceReportBuilder_Tests {
 		var replacement = report.RequestPlan.Replacements.Values.FirstOrDefault(r => r.Placeholder.StartsWith("{code_challenge", StringComparison.OrdinalIgnoreCase));
 		replacement.ShouldNotBeNull();
 		replacement.Source.ShouldBe("{AzureB2C:code_challenge}");
+		report.RequestType.ShouldBe(RequestType.AuthorizationRequest_AuthCodeWithPKCE);
 		missing.ContainsKey(replacement.Placeholder).ShouldBeFalse();
 	}
 
@@ -63,6 +65,7 @@ public class SourceReportBuilder_Tests {
 		unsourcedCookies.Count.ShouldBe(1);
 		unsourcedCookies.ContainsKey("missing-cookie").ShouldBeTrue();
 		unsourcedCookies["missing-cookie"].ShouldBe("not-found");
+		report.RequestType.ShouldBe(RequestType.Unknown);
 		report.RequestPlan.Cookies.Count.ShouldBe(1);
 		report.RequestPlan.Cookies.ContainsKey("missing-cookie").ShouldBeTrue();
 		report.RequestPlan.Cookies["missing-cookie"].ShouldBe("not-found");
@@ -90,32 +93,127 @@ public class SourceReportBuilder_Tests {
 		);
 
 		unsourcedCookies.Count.ShouldBe(0);
+		report.RequestType.ShouldBe(RequestType.AuthorizationRequest_AuthCode);
 		report.RequestPlan.Cookies.Count.ShouldBe(0);
+	}
+
+	[Fact]
+	public void WriteAllSessionSourcesReport_IncludesClassifierRequestTypeInSerializedMappings() {
+		// Given: a tiny flow with authorize, callback, and token exchange sessions.
+		var tempDirectory = Path.Combine(Path.GetTempPath(), $"sws-tests-{Guid.NewGuid():N}");
+		Directory.CreateDirectory(tempDirectory);
+		var outputBasePath = Path.Combine(tempDirectory, "capture.plan.json");
+
+		var sessions = new List<Session> {
+			BuildSession(
+				sessionId: 10,
+				url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&code_challenge=challenge-123",
+				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+			),
+			BuildSession(
+				sessionId: 11,
+				url: "https://app.example.com/signin-callback?code=auth-code&state=session-state",
+				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+			),
+			BuildSession(
+				sessionId: 12,
+				url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/token",
+				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+				method: "POST",
+				formBody: new List<FormBodyEntry> {
+					new("grant_type", "authorization_code"),
+					new("code", "auth-code"),
+					new("code_verifier", "verifier-123"),
+				}
+			)
+		};
+
+		try {
+			// When: all-session sources output is written to disk.
+			var sourcesPath = SazPlanBuilder.WriteAllSessionSourcesReport(outputBasePath, sessions);
+			var json = File.ReadAllText(sourcesPath);
+			using var document = JsonDocument.Parse(json);
+
+			// Then: each mapping includes the classifier result as a serialized string.
+			var mappings = document.RootElement.GetProperty("Mappings");
+			mappings.GetArrayLength().ShouldBe(3);
+			mappings[0].GetProperty("RequestType").GetString().ShouldBe("AuthorizationRequest_AuthCodeWithPKCE");
+			mappings[1].GetProperty("RequestType").GetString().ShouldBe("AuthorizationCallbackRequest");
+			mappings[2].GetProperty("RequestType").GetString().ShouldBe("AuthorizationCodeTokenRequest");
+		}
+		finally {
+			if (Directory.Exists(tempDirectory))
+				Directory.Delete(tempDirectory, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void WriteAllSessionSourcesReport_SerializesRefreshTokenRequestRequestType() {
+		// Given
+		var tempDirectory = Path.Combine(Path.GetTempPath(), $"sws-tests-{Guid.NewGuid():N}");
+		Directory.CreateDirectory(tempDirectory);
+		var outputBasePath = Path.Combine(tempDirectory, "capture.plan.json");
+
+		var sessions = new List<Session> {
+			BuildSession(
+				sessionId: 20,
+				url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/token",
+				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+				method: "POST",
+				formBody: new List<FormBodyEntry> {
+					new("grant_type", "refresh_token"),
+					new("refresh_token", "refresh-token-value"),
+				}
+			)
+		};
+
+		try {
+			// When
+			var sourcesPath = SazPlanBuilder.WriteAllSessionSourcesReport(outputBasePath, sessions);
+			var json = File.ReadAllText(sourcesPath);
+			using var document = JsonDocument.Parse(json);
+
+			// Then
+			var mappings = document.RootElement.GetProperty("Mappings");
+			mappings.GetArrayLength().ShouldBe(1);
+			mappings[0].GetProperty("RequestType").GetString().ShouldBe("RefreshTokenRequest");
+		}
+		finally {
+			if (Directory.Exists(tempDirectory))
+				Directory.Delete(tempDirectory, recursive: true);
+		}
 	}
 
 	static Session BuildSession(
 		int sessionId,
 		string url,
 		Dictionary<string, string> requestCookies,
-		Dictionary<string, string> responseHeaders
+		Dictionary<string, string> responseHeaders,
+		string method = "GET",
+		List<FormBodyEntry>? formBody = null
 	) {
 		var uri = new Uri(url);
 		var queryParameters = ParseQueryParameters(uri);
 
 		var request = new Request(
-			$"GET {url} HTTP/1.1",
-			"GET",
+			$"{method} {url} HTTP/1.1",
+			method,
 			url,
 			"HTTP/1.1",
 			url,
 			uri.Host,
 			queryParameters,
+			null,
 			new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			requestCookies,
 			new List<string>(),
 			new Body(0, null, "none", new List<string>()),
 			null,
-			null,
+			formBody,
 			new List<string>()
 		);
 

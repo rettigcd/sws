@@ -47,3 +47,34 @@ When I need a stable selector, I score attributes in this order:
 	stable class
 	element hierarchy
 	:nth-child()
+
+
+===============================
+===============================
+BUG		these cookies were sent to B2C but not identified as un-sourced
+		"ai_user": "KwoLb|2026-05-15T18:45:18.335Z",
+		"x-ms-cpim-csrf": "VTFSNU5IaTcxUCt6UkdwY0NlQlA1UVgwLysyUW9HNU0wbVJkMTQveE40WVIxdWhaVzJuazBlbEJrSnE3VXpoS0FwQjhuZmY3dkliOHR4b1NMWHh0MHc9PTsyMDI2LTA1LTI4VDE2OjAwOjU4LjQyMjk1NjlaO2NJekZ1WVpCQkdOd25aNy9KUzJMMlE9PTt7IlRhcmdldEVudGl0eSI6IlNpZ25pbkVtYWlsRXhjaGFuZ2UiLCJPcmNoZXN0cmF0aW9uU3RlcCI6MX0=",
+		"ai_session": "0qFir|1779984059058.9|1779984059058.9",
+		"x-ms-cpim-sso:tqlidentitystage.onmicrosoft.com/b2c_1a_signup_signin_passwordreset_0": "m1.64F9Gr1LChiicvXB.oFG9kqm62ENr3DFLVVpjFw==.0.4Xj2pn6W3FFnGidF9MXwxeY80G59jKTdboBUnID3Tqz4fxoAWXjARLURdW9jOFS2WzQW1J2eyL5f7w9iDg0zV9GxKYQ9ihDE0UzPQPFzFvL1ZAOPeOkIzZ4gUWzy9RpPj2WEbXRr/x2rAEHzwfwcIQj5KH4vYnZPTvNrQ7goigG\u002BtKwD5EPTG5/c0G/wK0NlZ\u002BvQ7uPrNGkifBa3CshQBAJf\u002BrwOuyNOacII3P6eQFypL7Ya5JxFOdjIc\u002BUFkhIchEDzPpopucRCqT70cb7OTlNec/dtDpofZj8LleaRx0ZaC2MrHM8YQmyqhXM1X4m3GEv0NU701CUhyW8z5xKscyAHAtaQJ89rxWtp5X\u002BqPRxeK4n8kHr83zwaq350xzXEo6J6LISN36bZlPH/nlbnHCwV/RlKp4Dj/4VF0X9ZFaD9IyjlNsppzP\u002BwdWQzOReNk5tNKSorF85vpZt0bDDjqrPcLd6YAZfe76QvIjfq1mKxGqf3GLebd6UKd6/DsSYmI3RuAjPxuBdyZx3sHG/pt0romH/2fpjFmj7086we35NMiSTr1APOaIACyJeHlkvWfT7ang0AxZYYlC7ILcEus3\u002BzMBawuQmihk0wYeBSdAvrGxKNaPo5/jwJOK1IR6J/hQMsT4b5glGMpaeZivSRbv7aMEhBhtcb22t0MJ5ri57/YfwhPK5KNt1FKfqY3hg3MF5rPxKdQhj7S210YGMobdbK\u002BGbzWjR\u002BW8r5SfsCLFBLmYaJR4sQbGoH3VaO40yPNdDrGEThbI\u002BlMIpYjdisEbJgl2pp1407Qm\u002BNWq19AqEpat6isIGBibBi3KDdS7J8mN0PsZ/sZCblFERvJy33O0EDXFtS8GRp4Fhquh0VR1UD"
+
+AuthorizationRequest might return:
+	no cookie	--> a log-in u002BwdWQzOReNk5tNKSorF85vpZt0bDDjqrPcLd6YAZfe76QvIjfq1mKxGqf3GLebd6UKd6
+	good cookie	--> the coded
+	bad cookie	--> denied?
+
+B2C login requires either valid cookies, OR user credentials
+
+AuthRequest - capture the Response Mode used aka "fragment" - need to submit that
+
+!!! Authorization Code Flow + PKCE should return  code=<authorization code> 
+!!! Authorization Code Flow + PKCE should also track what other info it is submitting like state, nonce, client-request-id, client_info
+
+When running, need to detect response and see if there is:
+	- a code returned + Redirect to callback page OR
+	- a login page.
+
+BUG	NOT recording / displaying Fragments in URLS  #....
+
+Responce type => → AuthorizationCodeRedirect   (code + redirect)
+
+

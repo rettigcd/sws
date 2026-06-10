@@ -28,20 +28,21 @@ dotnet run -- <path-to-capture.saz> --out plan.json
 This produces:
 
 - `<name>.plan.json` request/response plan
-- `<name>.plan.b2c.json` Azure B2C authentication flow scan report
-- `<name>.plan.sources.json` when `--sources-all` is provided
+- `<name>.plan.b2c.json` OAuth/B2C request list in session order with `SessionId` and `RequestType`
+- `<name>.plan.sources.json` source mapping report
 
 Options:
 
 - `--out <file>`: write JSON to file (otherwise prints to stdout)
 - default output is indented JSON
 - `--compact`: compact JSON output
-- `--sources-all`: write an additional `<name>.plan.sources.json` source mapping report
+
+Note: the sources report is always generated.
 
 ## Example
 
 ```bash
-dotnet run --project app/sws.csproj  -- C:/Users/myusername/Desktop/capture.saz --sources-all
+dotnet run --project app/sws.csproj  -- C:/Users/myusername/Desktop/capture.saz
 dotnet run -- ./capture.saz --out ./capture.plan.json
 ```
 

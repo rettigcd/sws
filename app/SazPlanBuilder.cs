@@ -66,6 +66,8 @@ internal static class SazPlanBuilder {
 			)
 			.ToList();
 
+		sessions = AttachRedirectFragments(sessions);
+
 		var globalHeaders = BuildGlobalHeadersGroup(sessions);
 		var sessionsWithoutGlobalHeaders = RemoveGlobalHeaders(sessions, globalHeaders.Headers);
 
@@ -79,6 +81,7 @@ internal static class SazPlanBuilder {
 
 	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<Session> sessions) {
 		var outputPath = Path.ChangeExtension(outputBasePath, ".sources.json");
+		var classifiedSessions = AzureB2cAuthenticationScanner.ClassifyUnknownSessions(sessions);
 		var options = new JsonSerializerOptions {
 			WriteIndented = true,
 			IndentCharacter = '\t',
@@ -88,9 +91,9 @@ internal static class SazPlanBuilder {
 
 		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		var unsourcedCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		var azureB2cSourceContext = SourceReportBuilder.BuildAzureB2cSourceContext(sessions);
-		var mappings = sessions
-			.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, sessions, missing, unsourcedCookies, azureB2cSourceContext))
+		var azureB2cSourceContext = SourceReportBuilder.BuildAzureB2cSourceContext(classifiedSessions);
+		var mappings = classifiedSessions
+			.Select((session, index) => SourceReportBuilder.BuildSessionSourcesReport(index, classifiedSessions, missing, unsourcedCookies, azureB2cSourceContext))
 			.ToList();
 
 		var sortedUnsourcedCookies = unsourcedCookies
@@ -281,6 +284,7 @@ internal static class SazPlanBuilder {
 			url,
 			hostHeader,
 			ParseQueryParameters(url),
+			ExtractFragment(url, requestLine.Target),
 			requestHeaders,
 			ParseCookies(GetHeader(request.Headers, "Cookie")),
 			dynamicHeaders,
@@ -307,6 +311,72 @@ internal static class SazPlanBuilder {
 			requestPlan,
 			responsePlan
 		);
+	}
+
+	static List<Session> AttachRedirectFragments(List<Session> sessions) {
+		var locationFragmentsByUrl = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		var enriched = new List<Session>(sessions.Count);
+
+		foreach (var session in sessions) {
+			var request = session.Request;
+			var normalizedUrl = NormalizeUrlWithoutFragment(request.Url);
+
+			if (string.IsNullOrWhiteSpace(request.Fragment)
+				&& !string.IsNullOrWhiteSpace(normalizedUrl)
+				&& locationFragmentsByUrl.TryGetValue(normalizedUrl, out var fragmentFromRedirect)) {
+				request = request with { Fragment = fragmentFromRedirect };
+			}
+
+			enriched.Add(session with { Request = request });
+
+			if (!session.Response.Headers.TryGetValue("Location", out var location)
+				|| string.IsNullOrWhiteSpace(location)
+				|| !Uri.TryCreate(location, UriKind.Absolute, out var locationUri)) {
+				continue;
+			}
+
+			var fragment = locationUri.Fragment.TrimStart('#');
+			if (string.IsNullOrWhiteSpace(fragment))
+				continue;
+
+			var callbackUrl = NormalizeUrlWithoutFragment(locationUri.ToString());
+			if (!string.IsNullOrWhiteSpace(callbackUrl))
+				locationFragmentsByUrl[callbackUrl] = fragment;
+		}
+
+		return enriched;
+	}
+
+	static string? ExtractFragment(string url, string target) {
+		if (Uri.TryCreate(url, UriKind.Absolute, out var absoluteUrl)) {
+			var fragment = absoluteUrl.Fragment.TrimStart('#');
+			if (!string.IsNullOrWhiteSpace(fragment))
+				return fragment;
+		}
+
+		if (Uri.TryCreate(target, UriKind.Absolute, out var absoluteTarget)) {
+			var fragment = absoluteTarget.Fragment.TrimStart('#');
+			if (!string.IsNullOrWhiteSpace(fragment))
+				return fragment;
+		}
+
+		var hashIndex = target.IndexOf('#', StringComparison.Ordinal);
+		if (hashIndex >= 0 && hashIndex + 1 < target.Length)
+			return target[(hashIndex + 1)..];
+
+		return null;
+	}
+
+	static string NormalizeUrlWithoutFragment(string url) {
+		if (string.IsNullOrWhiteSpace(url))
+			return string.Empty;
+
+		if (Uri.TryCreate(url, UriKind.Absolute, out var absoluteUrl)) {
+			return absoluteUrl.GetLeftPart(UriPartial.Path) + absoluteUrl.Query;
+		}
+
+		var hashIndex = url.IndexOf('#', StringComparison.Ordinal);
+		return hashIndex >= 0 ? url[..hashIndex] : url;
 	}
 
 	static RequestLineParts ParseRequestLine(string startLine) {
