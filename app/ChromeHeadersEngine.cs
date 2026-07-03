@@ -36,7 +36,7 @@ internal static class ChromeHeadersEngine {
 	}
 
 	public static Dictionary<string, string> BuildHeaders(string method, Uri? requestUri) {
-		var isDocumentNavigation = IsDocumentNavigationRequest(method, requestUri);
+		bool isDocumentNavigation = IsDocumentNavigationRequest(method, requestUri);
 		var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
 			["Accept-Encoding"] = "gzip, deflate, br, zstd",
 			["Accept-Language"] = "en-US,en;q=0.9",
@@ -75,11 +75,11 @@ internal static class ChromeHeadersEngine {
 		if (requestUri is null)
 			return true;
 
-		var path = requestUri.AbsolutePath;
+		string path = requestUri.AbsolutePath;
 		if (string.IsNullOrWhiteSpace(path) || path == "/")
 			return true;
 
-		var extension = Path.GetExtension(path);
+		string extension = Path.GetExtension(path);
 		if (string.IsNullOrWhiteSpace(extension))
 			return true;
 

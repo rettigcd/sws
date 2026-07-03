@@ -6,7 +6,7 @@ internal static class B2cCookieNames {
 	];
 
 	public static bool IsB2cCookie(string cookieName) {
-		foreach (var prefix in Prefixes)
+		foreach (string prefix in Prefixes)
 			if (cookieName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
 				return true;
 

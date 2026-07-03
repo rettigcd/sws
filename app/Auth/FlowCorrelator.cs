@@ -51,7 +51,7 @@ internal static class FlowCorrelator {
 
 	public static List<FlowInProgress> Correlate(IReadOnlyList<Session> sessions) {
 		var flows = new List<FlowInProgress>();
-		var nextFlowId = 1;
+		int nextFlowId = 1;
 
 		var authRequests = sessions.Where(s => AuthorizationRequestTypes.Contains(s.Request.RequestType)).ToList();
 		var callbacks = sessions.Where(s => s.Request.RequestType == RequestType.AuthorizationCallbackRequest).ToList();
@@ -81,7 +81,7 @@ internal static class FlowCorrelator {
 				continue;
 			}
 
-			var (authRequest, reason, confidenceDelta) = match.Value;
+			(Session authRequest, string reason, double confidenceDelta) = match.Value;
 			usedAuthRequestIds.Add(authRequest.SessionId);
 			var flow = flowByAuthRequestId[authRequest.SessionId];
 			AttachCallback(flow, callback, reason, confidenceDelta);
@@ -202,10 +202,10 @@ internal static class FlowCorrelator {
 		if (priorCandidates.Count == 0)
 			return null;
 
-		var callbackState = callback.Request.QueryParameters.TryGetValue("state", out var qsState) ? qsState : null;
+		string? callbackState = callback.Request.QueryParameters.TryGetValue("state", out string? qsState) ? qsState : null;
 		if (callbackState is null
 			&& OAuthParameterHelpers.TryParseFragmentParameters(callback.Request.Fragment, out var fragmentParams)
-			&& fragmentParams.TryGetValue("state", out var fragState)) {
+			&& fragmentParams.TryGetValue("state", out string? fragState)) {
 			callbackState = fragState;
 		}
 
@@ -216,12 +216,12 @@ internal static class FlowCorrelator {
 		}
 
 		foreach (var candidate in priorCandidates) {
-			var redirectUri = TryGet(candidate.Request, "redirect_uri");
+			string? redirectUri = TryGet(candidate.Request, "redirect_uri");
 			if (redirectUri is not null && OAuthParameterHelpers.UrlsMatchIgnoringFragment(redirectUri, callback.Request.Url))
 				return (candidate, "redirect_uri + sequence match", 0.3);
 		}
 
-		var host = Uri.TryCreate(callback.Request.Url, UriKind.Absolute, out var callbackUri) ? callbackUri.Host : null;
+		string? host = Uri.TryCreate(callback.Request.Url, UriKind.Absolute, out var callbackUri) ? callbackUri.Host : null;
 		var sequenceMatch = priorCandidates.FirstOrDefault(a =>
 			host is null || (Uri.TryCreate(a.Request.Url, UriKind.Absolute, out var authUri) && authUri.Host == host)
 		) ?? priorCandidates[0];
@@ -234,10 +234,10 @@ internal static class FlowCorrelator {
 		flow.RelatedSessionIds.Add(callback.SessionId);
 		flow.ReduceConfidence(confidenceDelta, reason);
 
-		var code = callback.Request.QueryParameters.TryGetValue("code", out var qsCode) ? qsCode : null;
+		string? code = callback.Request.QueryParameters.TryGetValue("code", out string? qsCode) ? qsCode : null;
 		if (code is null
 			&& OAuthParameterHelpers.TryParseFragmentParameters(callback.Request.Fragment, out var fragmentParams)
-			&& fragmentParams.TryGetValue("code", out var fragCode)) {
+			&& fragmentParams.TryGetValue("code", out string? fragCode)) {
 			code = fragCode;
 		}
 
@@ -245,7 +245,7 @@ internal static class FlowCorrelator {
 	}
 
 	static FlowInProgress? MatchAuthorizationCodeTokenRequest(Session tokenRequest, List<FlowInProgress> flows) {
-		var code = TryGet(tokenRequest.Request, "code");
+		string? code = TryGet(tokenRequest.Request, "code");
 		if (code is not null) {
 			var exact = flows.FirstOrDefault(f => f.CapturedCode == code && f.TokenRequestSessionId is null);
 			if (exact is not null)
@@ -274,7 +274,7 @@ internal static class FlowCorrelator {
 	}
 
 	static FlowInProgress? MatchRefreshTokenRequest(Session tokenRequest, List<FlowInProgress> flows) {
-		var refreshToken = TryGet(tokenRequest.Request, "refresh_token");
+		string? refreshToken = TryGet(tokenRequest.Request, "refresh_token");
 		if (refreshToken is null)
 			return null;
 
@@ -289,7 +289,7 @@ internal static class FlowCorrelator {
 	) {
 		var deviceCodeByAuthRequest = new Dictionary<int, string?>();
 		foreach (var deviceAuthRequest in deviceAuthRequests) {
-			var deviceCode = deviceAuthRequest.Response.ResponseJson?.TryGetProperty("device_code", out var el) == true && el.ValueKind == System.Text.Json.JsonValueKind.String
+			string? deviceCode = deviceAuthRequest.Response.ResponseJson?.TryGetProperty("device_code", out var el) == true && el.ValueKind == System.Text.Json.JsonValueKind.String
 				? el.GetString()
 				: null;
 			deviceCodeByAuthRequest[deviceAuthRequest.SessionId] = deviceCode;
@@ -304,12 +304,12 @@ internal static class FlowCorrelator {
 			flow.Scopes = SplitScopes(TryGet(deviceAuthRequest.Request, "scope"));
 			flows.Add(flow);
 
-			if (deviceCodeByAuthRequest.TryGetValue(deviceAuthRequest.SessionId, out var deviceCode) && deviceCode is not null)
+			if (deviceCodeByAuthRequest.TryGetValue(deviceAuthRequest.SessionId, out string? deviceCode) && deviceCode is not null)
 				flowsByDeviceCode[deviceCode] = flow;
 		}
 
 		foreach (var pollRequest in deviceCodeTokenRequests) {
-			var deviceCode = TryGet(pollRequest.Request, "device_code");
+			string? deviceCode = TryGet(pollRequest.Request, "device_code");
 			if (deviceCode is not null && flowsByDeviceCode.TryGetValue(deviceCode, out var flow)) {
 				flow.RelatedSessionIds.Add(pollRequest.SessionId);
 				flow.TokenRequestSessionId = pollRequest.SessionId;
@@ -324,7 +324,7 @@ internal static class FlowCorrelator {
 	}
 
 	static void AttachDiscovery(FlowInProgress flow, IReadOnlyList<Session> sessions) {
-		var anchorSessionId = flow.AuthorizationRequestSessionId ?? flow.TokenRequestSessionId ?? flow.RelatedSessionIds.FirstOrDefault();
+		int anchorSessionId = flow.AuthorizationRequestSessionId ?? flow.TokenRequestSessionId ?? flow.RelatedSessionIds.FirstOrDefault();
 		var anchorSession = sessions.FirstOrDefault(s => s.SessionId == anchorSessionId);
 		if (anchorSession is null)
 			return;
@@ -342,7 +342,7 @@ internal static class FlowCorrelator {
 	}
 
 	static string? TryGet(Request request, string key) {
-		return OAuthParameterHelpers.TryGetRequestParameter(request, key, out var value) ? value : null;
+		return OAuthParameterHelpers.TryGetRequestParameter(request, key, out string value) ? value : null;
 	}
 
 	static List<string> SplitScopes(string? scope) {

@@ -55,7 +55,7 @@ internal static class CookieSourceService {
 	}
 
 	static bool IsAzureB2cFlowCookie(string cookieName) {
-		foreach (var prefix in AzureB2cCookiePrefixes)
+		foreach (string prefix in AzureB2cCookiePrefixes)
 			if (cookieName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
 				return true;
 
@@ -68,7 +68,7 @@ internal static class CookieSourceService {
 		string cookieValue,
 		Func<IReadOnlyList<Session>, string, List<SourceFinding>> getOrderedSources
 	) {
-		var pairNeedle = $"{cookieName}={cookieValue}";
+		string pairNeedle = $"{cookieName}={cookieValue}";
 		if (getOrderedSources(previousSessions, pairNeedle).Count > 0)
 			return true;
 

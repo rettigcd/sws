@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 internal static class SazHttpMessageParser {
@@ -19,14 +20,48 @@ internal static class SazHttpMessageParser {
 				headers["Host"] = target;
 		}
 
+		if (headers.TryGetValue("Transfer-Encoding", out string? transferEncoding)
+			&& transferEncoding.Contains("chunked", StringComparison.OrdinalIgnoreCase)) {
+			bodyBytes = Dechunk(bodyBytes);
+		}
+
 		return new HttpMessageParts(startLine, headers, bodyBytes);
+	}
+
+	/// <summary>Strips HTTP chunked-transfer-encoding framing (chunk-size lines and trailing CRLFs), leaving raw body bytes.</summary>
+	private static byte[] Dechunk(byte[] body) {
+		var crlf = new byte[] { 13, 10 };
+		using var output = new MemoryStream();
+
+		int pos = 0;
+		while (pos < body.Length) {
+			int lineEnd = IndexOf(body, crlf, startIndex: pos);
+			if (lineEnd < 0)
+				break;
+
+			string sizeLine = Encoding.ASCII.GetString(body, pos, lineEnd - pos).Split(';')[0].Trim();
+			if (!int.TryParse(sizeLine, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int chunkSize))
+				break;
+
+			if (chunkSize == 0)
+				break;
+
+			int chunkStart = lineEnd + crlf.Length;
+			if (chunkStart + chunkSize > body.Length)
+				break;
+
+			output.Write(body, chunkStart, chunkSize);
+			pos = chunkStart + chunkSize + crlf.Length;
+		}
+
+		return output.ToArray();
 	}
 
 	private static (byte[] headerBytes, byte[] bodyBytes) FindHeaderBodySeparator(byte[] rawBytes) {
 		var crlf = new byte[] { 13, 10, 13, 10 };
 		var lf = new byte[] { 10, 10 };
 
-		var idx = IndexOf(rawBytes, crlf);
+		int idx = IndexOf(rawBytes, crlf);
 		if (idx >= 0) {
 			return (
 				rawBytes[..idx],
@@ -46,12 +81,16 @@ internal static class SazHttpMessageParser {
 	}
 
 	private static int IndexOf(byte[] data, byte[] marker) {
+		return IndexOf(data, marker, 0);
+	}
+
+	private static int IndexOf(byte[] data, byte[] marker, int startIndex) {
 		if (marker.Length == 0 || data.Length < marker.Length)
 			return -1;
 
-		for (var i = 0; i <= data.Length - marker.Length; i++) {
-			var matched = true;
-			for (var j = 0; j < marker.Length; j++) {
+		for (int i = startIndex; i <= data.Length - marker.Length; i++) {
+			bool matched = true;
+			for (int j = 0; j < marker.Length; j++) {
 				if (data[i + j] != marker[j]) {
 					matched = false;
 					break;
@@ -69,7 +108,7 @@ internal static class SazHttpMessageParser {
 		var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		string? currentHeader = null;
 
-		foreach (var rawLine in headerLines) {
+		foreach (string rawLine in headerLines) {
 			if (string.IsNullOrEmpty(rawLine))
 				continue;
 
@@ -78,17 +117,19 @@ internal static class SazHttpMessageParser {
 				continue;
 			}
 
-			var idx = rawLine.IndexOf(':');
+			int idx = rawLine.IndexOf(':');
 			if (idx <= 0)
 				continue;
 
-			var name = rawLine[..idx].Trim();
-			var value = rawLine[(idx + 1)..].Trim();
+			string name = rawLine[..idx].Trim();
+			string value = rawLine[(idx + 1)..].Trim();
 			if (name.Length == 0)
 				continue;
 
 			currentHeader = name;
-			headers[name] = value;
+			headers[name] = headers.TryGetValue(name, out string? existingValue)
+				? existingValue + "\n" + value
+				: value;
 		}
 
 		return headers;

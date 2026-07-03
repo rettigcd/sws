@@ -18,7 +18,7 @@ internal static class OAuthParameterHelpers {
 	}
 
 	public static bool TryGetRequestParameter(Request request, string key, out string value) {
-		if (request.QueryParameters.TryGetValue(key, out var queryValue) && queryValue is not null) {
+		if (request.QueryParameters.TryGetValue(key, out string? queryValue) && queryValue is not null) {
 			value = queryValue;
 			return true;
 		}
@@ -42,17 +42,17 @@ internal static class OAuthParameterHelpers {
 		if (string.IsNullOrWhiteSpace(fragment))
 			return false;
 
-		var raw = fragment.TrimStart('#');
+		string raw = fragment.TrimStart('#');
 		if (raw.Length == 0)
 			return false;
 
-		foreach (var piece in raw.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string piece in raw.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = piece.Split('=', 2);
-			var key = Uri.UnescapeDataString(parts[0]);
+			string key = Uri.UnescapeDataString(parts[0]);
 			if (string.IsNullOrWhiteSpace(key))
 				continue;
 
-			var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+			string value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
 			parameters[key] = value;
 		}
 
@@ -71,8 +71,8 @@ internal static class OAuthParameterHelpers {
 				&& string.Equals(leftUri.Query, rightUri.Query, StringComparison.OrdinalIgnoreCase);
 		}
 
-		var normalizedLeft = left.Split('#', 2)[0];
-		var normalizedRight = right.Split('#', 2)[0];
+		string normalizedLeft = left.Split('#', 2)[0];
+		string normalizedRight = right.Split('#', 2)[0];
 		return normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase);
 	}
 
@@ -82,14 +82,14 @@ internal static class OAuthParameterHelpers {
 			return leftUri.GetLeftPart(UriPartial.Path).Equals(rightUri.GetLeftPart(UriPartial.Path), StringComparison.OrdinalIgnoreCase);
 		}
 
-		var normalizedLeft = left.Split(['#', '?'], 2)[0];
-		var normalizedRight = right.Split(['#', '?'], 2)[0];
+		string normalizedLeft = left.Split(['#', '?'], 2)[0];
+		string normalizedRight = right.Split(['#', '?'], 2)[0];
 		return normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase);
 	}
 
 	public static bool TryParseFragmentFromLocation(Response response, string callbackUrl, out Dictionary<string, string> parameters) {
 		parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		if (!response.Headers.TryGetValue("Location", out var location)
+		if (!response.Headers.TryGetValue("Location", out string? location)
 			|| string.IsNullOrWhiteSpace(location)
 			|| !UrlsMatchIgnoringFragment(location, callbackUrl)) {
 			return false;

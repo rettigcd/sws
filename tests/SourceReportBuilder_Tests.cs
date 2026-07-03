@@ -103,7 +103,7 @@ public class SourceReportBuilder_Tests {
 		// Given: a tiny flow with authorize, callback, and token exchange sessions.
 		var tempDirectory = Path.Combine(Path.GetTempPath(), $"sws-tests-{Guid.NewGuid():N}");
 		Directory.CreateDirectory(tempDirectory);
-		var outputBasePath = Path.Combine(tempDirectory, "capture.plan.json");
+		var outputBasePath = Path.Combine(tempDirectory, "capture.sessions.json");
 
 		var sessions = new List<Session> {
 			BuildSession(
@@ -156,7 +156,7 @@ public class SourceReportBuilder_Tests {
 		// Given
 		var tempDirectory = Path.Combine(Path.GetTempPath(), $"sws-tests-{Guid.NewGuid():N}");
 		Directory.CreateDirectory(tempDirectory);
-		var outputBasePath = Path.Combine(tempDirectory, "capture.plan.json");
+		var outputBasePath = Path.Combine(tempDirectory, "capture.sessions.json");
 
 		var sessions = new List<Session> {
 			BuildSession(
@@ -230,7 +230,7 @@ public class SourceReportBuilder_Tests {
 			Auth.ResponseType.Unknown
 		);
 
-		return new Session(sessionId, null, request, response);
+		return new Session(sessionId, null, null, request, response);
 	}
 
 	static Dictionary<string, string> ParseQueryParameters(Uri uri) {

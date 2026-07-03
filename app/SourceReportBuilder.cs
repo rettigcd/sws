@@ -22,7 +22,7 @@ internal static class SourceReportBuilder {
 		var targetSession = sessions[sessionIndex];
 		var previousSessions = sessions.Take(sessionIndex).ToList();
 		azureB2cSourceContext ??= BuildAzureB2cSourceContext(sessions);
-		var isAzureB2cFlowSession = azureB2cSourceContext.FlowSessionIds.Contains(targetSession.SessionId);
+		bool isAzureB2cFlowSession = azureB2cSourceContext.FlowSessionIds.Contains(targetSession.SessionId);
 		var unsourcedCookieList = CookieSourceService.BuildUnsourcedRequestCookies(
 			targetSession,
 			previousSessions,
@@ -73,7 +73,7 @@ internal static class SourceReportBuilder {
 			findings.Add(BuildFinding(piece, orderedSources.FirstOrDefault(), missing));
 		}
 
-		var isAzureB2cFlowSession = BuildAzureB2cSourceContext(sessions).FlowSessionIds.Contains(targetSession.SessionId);
+		bool isAzureB2cFlowSession = BuildAzureB2cSourceContext(sessions).FlowSessionIds.Contains(targetSession.SessionId);
 		ReplacementSourceResolver.PopulateReplacementSources(
 			requestPlan,
 			previousSessions,
@@ -92,10 +92,10 @@ internal static class SourceReportBuilder {
 		Dictionary<string, string>? missing
 	) {
 		var findings = new List<RequestSourceFinding>();
-		var remaining = NormalizePathPart(pathPiece.Value);
+		string remaining = NormalizePathPart(pathPiece.Value);
 
 		while (!string.IsNullOrWhiteSpace(remaining)) {
-			var foundPath = FindPathMatchWithProgressiveTrim(remaining, previousSessions, out var source);
+			string? foundPath = FindPathMatchWithProgressiveTrim(remaining, previousSessions, out var source);
 			if (string.IsNullOrWhiteSpace(foundPath) || source is null) {
 				findings.Add(BuildFinding(new RequestPiece(pathPiece.PieceKind, pathPiece.Name, remaining), null, missing));
 				break;
@@ -106,7 +106,7 @@ internal static class SourceReportBuilder {
 			if (string.Equals(foundPath, remaining, StringComparison.Ordinal))
 				break;
 
-			var unfound = remaining[foundPath.Length..];
+			string unfound = remaining[foundPath.Length..];
 			remaining = NormalizePathPart(unfound);
 		}
 
@@ -119,7 +119,7 @@ internal static class SourceReportBuilder {
 		out SourceFinding? source
 	) {
 		source = null;
-		var candidate = NormalizePathPart(path);
+		string candidate = NormalizePathPart(path);
 
 		while (!string.IsNullOrWhiteSpace(candidate)) {
 			var orderedSources = GetOrderedSources(previousSessions, candidate);
@@ -155,9 +155,9 @@ internal static class SourceReportBuilder {
 		if (source is not null)
 			return new RequestSourceFinding(piece, source);
 
-		var preferredKey = BuildPlaceholderName(piece);
+		string preferredKey = BuildPlaceholderName(piece);
 		if (missing is not null) {
-			var missingKey = RegisterMissingValue(missing, preferredKey, piece.Value);
+			string missingKey = RegisterMissingValue(missing, preferredKey, piece.Value);
 			return new RequestSourceFinding(piece, new MissingSourceReference(missingKey));
 		}
 
@@ -165,7 +165,7 @@ internal static class SourceReportBuilder {
 	}
 
 	static string BuildPlaceholderName(RequestPiece piece) {
-		var name = string.IsNullOrWhiteSpace(piece.Name) ? "value" : piece.Name.Trim();
+		string name = string.IsNullOrWhiteSpace(piece.Name) ? "value" : piece.Name.Trim();
 		return $"{{{name}}}";
 	}
 
@@ -174,9 +174,9 @@ internal static class SourceReportBuilder {
 	}
 
 	static string RegisterDictionaryValue(Dictionary<string, string> dictionary, string preferredKey, string value) {
-		var baseKey = string.IsNullOrWhiteSpace(preferredKey) ? "{value}" : preferredKey;
+		string baseKey = string.IsNullOrWhiteSpace(preferredKey) ? "{value}" : preferredKey;
 
-		if (!dictionary.TryGetValue(baseKey, out var existingValue)) {
+		if (!dictionary.TryGetValue(baseKey, out string? existingValue)) {
 			dictionary[baseKey] = value;
 			return baseKey;
 		}
@@ -184,9 +184,9 @@ internal static class SourceReportBuilder {
 		if (string.Equals(existingValue, value, StringComparison.Ordinal))
 			return baseKey;
 
-		var suffix = 1;
+		int suffix = 1;
 		while (true) {
-			var collisionKey = AppendCollisionSuffix(baseKey, suffix);
+			string collisionKey = AppendCollisionSuffix(baseKey, suffix);
 			if (!dictionary.TryGetValue(collisionKey, out existingValue)) {
 				dictionary[collisionKey] = value;
 				return collisionKey;
@@ -210,7 +210,7 @@ internal static class SourceReportBuilder {
 		if (string.IsNullOrWhiteSpace(path))
 			return string.Empty;
 
-		var trimmed = path.Trim();
+		string trimmed = path.Trim();
 		if (!trimmed.StartsWith("/", StringComparison.Ordinal))
 			trimmed = "/" + trimmed;
 
@@ -226,8 +226,8 @@ internal static class SourceReportBuilder {
 			return string.Empty;
 
 
-		var normalized = NormalizePathPart(path);
-		var lastSlash = normalized.LastIndexOf('/');
+		string normalized = NormalizePathPart(path);
+		int lastSlash = normalized.LastIndexOf('/');
 		if (lastSlash <= 0)
 			return string.Empty;
 
@@ -240,7 +240,7 @@ internal static class SourceReportBuilder {
 		if (!string.IsNullOrWhiteSpace(targetSession.Request.Host))
 			pieces.Add(new RequestPiece(RequestSourcePieceKind.Host, "host", targetSession.Request.Host));
 
-		var path = GetRequestPath(targetSession.Request);
+		string path = GetRequestPath(targetSession.Request);
 		if (!string.IsNullOrWhiteSpace(path) && !string.Equals(path, "/", StringComparison.Ordinal))
 			pieces.Add(new RequestPiece(RequestSourcePieceKind.Path, "path", path));
 
@@ -262,7 +262,7 @@ internal static class SourceReportBuilder {
 		if (Uri.TryCreate(request.Url, UriKind.Absolute, out var absoluteUri))
 			return absoluteUri.AbsolutePath;
 
-		var target = request.Target.Split('?', 2)[0];
+		string target = request.Target.Split('?', 2)[0];
 		return target;
 	}
 
@@ -280,7 +280,7 @@ internal static class SourceReportBuilder {
 			return parameters;
 
 		// Fallback for non-form bodies where parsed form pairs are unavailable.
-		foreach (var hint in request.Body.SchemaHints)
+		foreach (string hint in request.Body.SchemaHints)
 			if (!string.IsNullOrWhiteSpace(hint))
 				parameters.Add(new FormBodyEntry(hint, hint));
 
@@ -311,23 +311,23 @@ internal static class SourceReportBuilder {
 		switch (element.ValueKind) {
 			case JsonValueKind.Object:
 				foreach (var property in element.EnumerateObject()) {
-					var propertyPath = path == "$" ? $"$.{property.Name}" : $"{path}.{property.Name}";
+					string propertyPath = path == "$" ? $"$.{property.Name}" : $"{path}.{property.Name}";
 					foreach (var match in FindJsonValueMatches(property.Value, needle, propertyPath)) {
 						yield return match;
 					}
 				}
 				break;
 			case JsonValueKind.Array:
-				var index = 0;
+				int index = 0;
 				foreach (var item in element.EnumerateArray()) {
-					var itemPath = $"{path}[{index++}]";
+					string itemPath = $"{path}[{index++}]";
 					foreach (var match in FindJsonValueMatches(item, needle, itemPath)) {
 						yield return match;
 					}
 				}
 				break;
 			case JsonValueKind.String:
-				var stringValue = element.GetString() ?? string.Empty;
+				string stringValue = element.GetString() ?? string.Empty;
 				if (ContainsInsensitive(stringValue, needle)) {
 					yield return new JsonValueMatch(path, stringValue);
 				}
@@ -335,7 +335,7 @@ internal static class SourceReportBuilder {
 			case JsonValueKind.Number:
 			case JsonValueKind.True:
 			case JsonValueKind.False:
-				var scalarValue = element.ToString();
+				string scalarValue = element.ToString();
 				if (ContainsInsensitive(scalarValue, needle)) {
 					yield return new JsonValueMatch(path, scalarValue);
 				}

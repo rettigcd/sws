@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -7,7 +8,7 @@ if (args.Length == 0) {
 	return 1;
 }
 
-var inputPath = args[0];
+string inputPath = args[0];
 if (!File.Exists(inputPath)) {
 	Console.Error.WriteLine($"Input file not found: {inputPath}");
 	return 2;
@@ -23,8 +24,8 @@ string? outputPath = null;
 bool pretty = true;
 SazBuildOptions buildOptions = new ();
 
-for (var i = 1; i < args.Length; i++) {
-	var arg = args[i];
+for (int i = 1; i < args.Length; i++) {
+	string arg = args[i];
 	if (arg is "--compact") {
 		pretty = false;
 	}
@@ -63,8 +64,8 @@ try {
 	var plan = SazPlanBuilder.Build(inputPath, buildOptions);
 	var classifiedSessions = Auth.SessionClassifier.ClassifyUnknownSessions(plan.Sessions).ToList();
 	var classifiedPlan = plan with { Sessions = classifiedSessions };
-	var planOutputPath = ResolveOutputPath(inputPath, outputPath);
-	var authOutputPath = SazPlanBuilder.DeriveSiblingOutputPath(planOutputPath, ".auth.json");
+	string planOutputPath = ResolveOutputPath(inputPath, outputPath);
+	string authOutputPath = SazPlanBuilder.DeriveSiblingOutputPath(planOutputPath, ".auth.json");
 
 	WriteSazPlanAsJson(planOutputPath, pretty, classifiedPlan);
 	WriteAuthFlowReportAsJson(authOutputPath, pretty, Auth.AuthFlowDetector.Detect(classifiedSessions));
@@ -87,19 +88,20 @@ static string ResolveOutputPath(string inputPath, string? outputPath) {
 		if (Path.IsPathRooted(outputPath))
 			return outputPath;
 
-		var inputDirectory = Path.GetDirectoryName(Path.GetFullPath(inputPath)) ?? Directory.GetCurrentDirectory();
+		string inputDirectory = Path.GetDirectoryName(Path.GetFullPath(inputPath)) ?? Directory.GetCurrentDirectory();
 		return Path.Combine(inputDirectory, outputPath);
 	}
 
-	return Path.ChangeExtension(inputPath, ".plan.json");
+	return Path.ChangeExtension(inputPath, ".sessions.json");
 }
 
 static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
-	var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions {
+	string json = JsonSerializer.Serialize(plan, new JsonSerializerOptions {
 		WriteIndented = pretty,
 		IndentCharacter = '\t',
 		IndentSize = 1,
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 	});
 
 	File.WriteAllText(outputPath, json, Encoding.UTF8);
@@ -110,11 +112,12 @@ static void WriteAuthFlowReportAsJson(
 	bool pretty,
 	Auth.AuthFlowDetectionResult report
 ) {
-	var json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
+	string json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
 		WriteIndented = pretty,
 		IndentCharacter = '\t',
 		IndentSize = 1,
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 	});
 
 	File.WriteAllText(outputPath, json, Encoding.UTF8);

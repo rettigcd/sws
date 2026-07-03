@@ -7,7 +7,7 @@ internal static class RequestPlanReplayer {
 	) {
 		ArgumentNullException.ThrowIfNull(plans);
 
-		var ownsContext = context is null;
+		bool ownsContext = context is null;
 		context ??= new RequestExecutionContext();
 
 		try {

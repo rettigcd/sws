@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -80,13 +81,14 @@ internal static class SazPlanBuilder {
 	}
 
 	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<Session> sessions) {
-		var outputPath = DeriveSiblingOutputPath(outputBasePath, ".sources.json");
+		string outputPath = DeriveSiblingOutputPath(outputBasePath, ".sources.json");
 		var classifiedSessions = Auth.SessionClassifier.ClassifyUnknownSessions(sessions);
 		var options = new JsonSerializerOptions {
 			WriteIndented = true,
 			IndentCharacter = '\t',
 			IndentSize = 1,
 			DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+			Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 		};
 
 		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -113,14 +115,14 @@ internal static class SazPlanBuilder {
 
 	/// <summary>
 	/// Derives a sibling report path next to the main plan output, stripping a trailing
-	/// ".plan" segment (if present) so sibling reports read as "<name>.sources.json" rather
-	/// than "<name>.plan.sources.json".
+	/// ".sessions" segment (if present) so sibling reports read as "<name>.sources.json" rather
+	/// than "<name>.sessions.sources.json".
 	/// </summary>
 	internal static string DeriveSiblingOutputPath(string planOutputPath, string suffixWithExtension) {
-		var directory = Path.GetDirectoryName(planOutputPath) ?? string.Empty;
-		var fileName = Path.GetFileName(planOutputPath);
-		var baseName = fileName.EndsWith(".plan.json", StringComparison.OrdinalIgnoreCase)
-			? fileName[..^".plan.json".Length]
+		string directory = Path.GetDirectoryName(planOutputPath) ?? string.Empty;
+		string fileName = Path.GetFileName(planOutputPath);
+		string baseName = fileName.EndsWith(".sessions.json", StringComparison.OrdinalIgnoreCase)
+			? fileName[..^".sessions.json".Length]
 			: Path.GetFileNameWithoutExtension(fileName);
 
 		return Path.Combine(directory, baseName + suffixWithExtension);
@@ -137,12 +139,12 @@ internal static class SazPlanBuilder {
 		foreach (var session in sessions.Skip(1)) {
 			var toRemove = commonHeaders
 				.Where(commonHeader =>
-					!session.Request.Headers.TryGetValue(commonHeader.Key, out var value) ||
+					!session.Request.Headers.TryGetValue(commonHeader.Key, out string? value) ||
 					!string.Equals(value, commonHeader.Value, StringComparison.Ordinal))
 				.Select(commonHeader => commonHeader.Key)
 				.ToList();
 
-			foreach (var key in toRemove)
+			foreach (string key in toRemove)
 				commonHeaders.Remove(key);
 		}
 
@@ -179,7 +181,7 @@ internal static class SazPlanBuilder {
 		if (HasPathExtension(session.Request.Url, ".css"))
 			return true;
 
-		if (session.Response.Headers.TryGetValue("Content-Type", out var responseContentType) &&
+		if (session.Response.Headers.TryGetValue("Content-Type", out string? responseContentType) &&
 			responseContentType.Contains("text/css", StringComparison.OrdinalIgnoreCase)) {
 			return true;
 		}
@@ -191,7 +193,7 @@ internal static class SazPlanBuilder {
 		if (HasPathExtension(session.Request.Url, MediaPathExtensions))
 			return true;
 
-		if (session.Response.Headers.TryGetValue("Content-Type", out var responseContentType)) {
+		if (session.Response.Headers.TryGetValue("Content-Type", out string? responseContentType)) {
 			if (responseContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) 
 				|| responseContentType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) 
 				|| responseContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)
@@ -212,7 +214,7 @@ internal static class SazPlanBuilder {
 	}
 
 	static bool IsExcludedHostSession(Session session) {
-		var host = GetNormalizedHost(session);
+		string host = GetNormalizedHost(session);
 		return !string.IsNullOrWhiteSpace(host) && ExcludedHosts.Contains(host);
 	}
 
@@ -220,13 +222,13 @@ internal static class SazPlanBuilder {
 		if (Uri.TryCreate(session.Request.Url, UriKind.Absolute, out var uri))
 			return uri.Host.ToLowerInvariant();
 
-		var host = session.Request.Host?.Trim() ?? string.Empty;
+		string host = session.Request.Host?.Trim() ?? string.Empty;
 		if (host.Length == 0)
 			return string.Empty;
 
 		if (!host.StartsWith("[", StringComparison.Ordinal)) {
-			var firstColon = host.IndexOf(":", StringComparison.Ordinal);
-			var lastColon = host.LastIndexOf(":", StringComparison.Ordinal);
+			int firstColon = host.IndexOf(":", StringComparison.Ordinal);
+			int lastColon = host.LastIndexOf(":", StringComparison.Ordinal);
 			if (firstColon > 0 && firstColon == lastColon)
 				host = host[..firstColon];
 		}
@@ -241,7 +243,7 @@ internal static class SazPlanBuilder {
 		if (Uri.TryCreate(urlOrPath, UriKind.Absolute, out var uri))
 			return uri.AbsolutePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase);
 
-		var path = urlOrPath.Split('?', 2)[0];
+		string path = urlOrPath.Split('?', 2)[0];
 		return path.EndsWith(extension, StringComparison.OrdinalIgnoreCase);
 	}
 
@@ -255,7 +257,7 @@ internal static class SazPlanBuilder {
 		else
 			path = urlOrPath.Split('?', 2)[0];
 
-		var extension = Path.GetExtension(path);
+		string extension = Path.GetExtension(path);
 		if (string.IsNullOrWhiteSpace(extension))
 			return false;
 
@@ -263,22 +265,28 @@ internal static class SazPlanBuilder {
 	}
 
 	static Session BuildSessionPlan(SessionRaw raw, bool includeMetadata) {
-		var metadata = includeMetadata ? SazMetadataParser.Parse(raw.MetadataBytes, raw.Id) : null;
+		var parsedMetadata = SazMetadataParser.Parse(raw.MetadataBytes, raw.Id);
+		var metadata = includeMetadata ? parsedMetadata : null;
+
+		DateTimeOffset? timestamp = null;
+		if (parsedMetadata.Timers.TryGetValue("ClientBeginRequest", out var tsStr)
+			&& DateTimeOffset.TryParse(tsStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var ts))
+			timestamp = ts;
 		var request = SazHttpMessageParser.Parse(raw.ClientRequestBytes, isRequest: true);
 		var response = SazHttpMessageParser.Parse(raw.ServerResponseBytes, isRequest: false);
 
 		var requestLine = ParseRequestLine(request.StartLine);
 		var statusLine = ParseStatusLine(response.StartLine);
-		var hostHeader = GetHeader(request.Headers, "Host");
+		string? hostHeader = GetHeader(request.Headers, "Host");
 
-		var url = BuildUrl(requestLine.Method, requestLine.Target, hostHeader, metadata);
-		var requestBodyText = BodyAnalyzer.DecodeBodyText(request.Headers, request.BodyBytes);
+		string url = BuildUrl(requestLine.Method, requestLine.Target, hostHeader, metadata);
+		string requestBodyText = BodyAnalyzer.DecodeBodyText(request.Headers, request.BodyBytes);
 		var requestBody = BodyAnalyzer.BuildBodyPlan(request.Headers, request.BodyBytes);
 		var requestJsonBody = BodyAnalyzer.BuildRequestJsonBody(requestBody.Format, requestBodyText);
 		var requestFormBody = BodyAnalyzer.BuildRequestFormBody(requestBody.Format, requestBodyText);
-		var responseBodyText = BodyAnalyzer.DecodeBodyText(response.Headers, response.BodyBytes);
+		string responseBodyText = BodyAnalyzer.DecodeBodyText(response.Headers, response.BodyBytes);
 		var responseBody = BodyAnalyzer.BuildBodyPlan(response.Headers, response.BodyBytes);
-		var responseText = BodyAnalyzer.BuildResponseText(response.Headers, responseBodyText);
+		string? responseText = BodyAnalyzer.BuildResponseText(response.Headers, responseBodyText);
 		var responseJson = BodyAnalyzer.BuildResponseJson(responseBody.Format, responseBodyText);
 
 		var requestHeaders = request.Headers
@@ -322,6 +330,7 @@ internal static class SazPlanBuilder {
 
 		return new Session(
 			raw.Id,
+			timestamp,
 			metadata,
 			requestPlan,
 			responsePlan
@@ -334,27 +343,27 @@ internal static class SazPlanBuilder {
 
 		foreach (var session in sessions) {
 			var request = session.Request;
-			var normalizedUrl = NormalizeUrlWithoutFragment(request.Url);
+			string normalizedUrl = NormalizeUrlWithoutFragment(request.Url);
 
 			if (string.IsNullOrWhiteSpace(request.Fragment)
 				&& !string.IsNullOrWhiteSpace(normalizedUrl)
-				&& locationFragmentsByUrl.TryGetValue(normalizedUrl, out var fragmentFromRedirect)) {
+				&& locationFragmentsByUrl.TryGetValue(normalizedUrl, out string? fragmentFromRedirect)) {
 				request = request with { Fragment = fragmentFromRedirect };
 			}
 
 			enriched.Add(session with { Request = request });
 
-			if (!session.Response.Headers.TryGetValue("Location", out var location)
+			if (!session.Response.Headers.TryGetValue("Location", out string? location)
 				|| string.IsNullOrWhiteSpace(location)
 				|| !Uri.TryCreate(location, UriKind.Absolute, out var locationUri)) {
 				continue;
 			}
 
-			var fragment = locationUri.Fragment.TrimStart('#');
+			string fragment = locationUri.Fragment.TrimStart('#');
 			if (string.IsNullOrWhiteSpace(fragment))
 				continue;
 
-			var callbackUrl = NormalizeUrlWithoutFragment(locationUri.ToString());
+			string callbackUrl = NormalizeUrlWithoutFragment(locationUri.ToString());
 			if (!string.IsNullOrWhiteSpace(callbackUrl))
 				locationFragmentsByUrl[callbackUrl] = fragment;
 		}
@@ -364,18 +373,18 @@ internal static class SazPlanBuilder {
 
 	static string? ExtractFragment(string url, string target) {
 		if (Uri.TryCreate(url, UriKind.Absolute, out var absoluteUrl)) {
-			var fragment = absoluteUrl.Fragment.TrimStart('#');
+			string fragment = absoluteUrl.Fragment.TrimStart('#');
 			if (!string.IsNullOrWhiteSpace(fragment))
 				return fragment;
 		}
 
 		if (Uri.TryCreate(target, UriKind.Absolute, out var absoluteTarget)) {
-			var fragment = absoluteTarget.Fragment.TrimStart('#');
+			string fragment = absoluteTarget.Fragment.TrimStart('#');
 			if (!string.IsNullOrWhiteSpace(fragment))
 				return fragment;
 		}
 
-		var hashIndex = target.IndexOf('#', StringComparison.Ordinal);
+		int hashIndex = target.IndexOf('#', StringComparison.Ordinal);
 		if (hashIndex >= 0 && hashIndex + 1 < target.Length)
 			return target[(hashIndex + 1)..];
 
@@ -390,26 +399,26 @@ internal static class SazPlanBuilder {
 			return absoluteUrl.GetLeftPart(UriPartial.Path) + absoluteUrl.Query;
 		}
 
-		var hashIndex = url.IndexOf('#', StringComparison.Ordinal);
+		int hashIndex = url.IndexOf('#', StringComparison.Ordinal);
 		return hashIndex >= 0 ? url[..hashIndex] : url;
 	}
 
 	static RequestLineParts ParseRequestLine(string startLine) {
 		var parts = startLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-		var method = parts.Length > 0 ? parts[0] : "GET";
-		var target = parts.Length > 1 ? parts[1] : "/";
-		var version = parts.Length > 2 ? parts[2] : "HTTP/1.1";
+		string method = parts.Length > 0 ? parts[0] : "GET";
+		string target = parts.Length > 1 ? parts[1] : "/";
+		string version = parts.Length > 2 ? parts[2] : "HTTP/1.1";
 		return new RequestLineParts(method, target, version);
 	}
 
 	static StatusLineParts ParseStatusLine(string startLine) {
 		var parts = startLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
 
-		var code = 0;
+		int code = 0;
 		if (parts.Length > 1)
 			int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
 
-		var reason = parts.Length > 2 ? parts[2] : string.Empty;
+		string reason = parts.Length > 2 ? parts[2] : string.Empty;
 		return new StatusLineParts(code, reason);
 	}
 
@@ -420,13 +429,13 @@ internal static class SazPlanBuilder {
 		if (string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase))
 			return "https://" + target;
 
-		var scheme = metadata?.Flags.TryGetValue("x-overrideGateway", out var gateway) == true 
+		string scheme = metadata?.Flags.TryGetValue("x-overrideGateway", out string? gateway) == true
 			&& gateway.Contains("https", StringComparison.OrdinalIgnoreCase)
 			? "https"
 			: "http";
 
 		if (!string.IsNullOrWhiteSpace(host)) {
-			var normalizedTarget = target.StartsWith('/') ? target : "/" + target;
+			string normalizedTarget = target.StartsWith('/') ? target : "/" + target;
 			return $"{scheme}://{host}{normalizedTarget}";
 		}
 
@@ -440,11 +449,11 @@ internal static class SazPlanBuilder {
 			return result;
 
 
-		var query = uri.Query.TrimStart('?');
-		foreach (var item in query.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+		string query = uri.Query.TrimStart('?');
+		foreach (string item in query.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = item.Split('=', 2);
-			var name = Uri.UnescapeDataString(parts[0]);
-			var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+			string name = Uri.UnescapeDataString(parts[0]);
+			string value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
 			result[name] = value;
 		}
 
@@ -457,13 +466,13 @@ internal static class SazPlanBuilder {
 		if (string.IsNullOrWhiteSpace(cookieHeader))
 			return cookies;
 
-		foreach (var piece in cookieHeader.Split(';', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string piece in cookieHeader.Split(';', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = piece.Split('=', 2);
 			if (parts.Length == 0)
 				continue;
 
-			var key = parts[0].Trim();
-			var value = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+			string key = parts[0].Trim();
+			string value = parts.Length > 1 ? parts[1].Trim() : string.Empty;
 
 			if (!string.IsNullOrWhiteSpace(key))
 				cookies[key] = value;
@@ -474,7 +483,7 @@ internal static class SazPlanBuilder {
 	}
 
 	static string? GetHeader(Dictionary<string, string> headers, string name) {
-		return headers.TryGetValue(name, out var value) ? value : null;
+		return headers.TryGetValue(name, out string? value) ? value : null;
 	}
 
 

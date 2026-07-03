@@ -18,8 +18,8 @@ internal static class SazArchiveReader {
 			if (!match.Success)
 				continue;
 
-			var id = int.Parse(match.Groups["id"].Value, CultureInfo.InvariantCulture);
-			var kind = match.Groups["kind"].Value.ToLowerInvariant();
+			int id = int.Parse(match.Groups["id"].Value, CultureInfo.InvariantCulture);
+			string kind = match.Groups["kind"].Value.ToLowerInvariant();
 
 			if (!map.TryGetValue(id, out var sessionRaw)) {
 				sessionRaw = new SessionRaw(id);

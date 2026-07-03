@@ -39,7 +39,7 @@ dotnet build
 dotnet run -- <path-to-capture.saz>
 ```
 
-`--out` is optional; if omitted, output defaults to `<path-to-capture>.plan.json` next to the input file.
+`--out` is optional; if omitted, output defaults to `<path-to-capture>.sessions.json` next to the input file.
 
 ```bash
 dotnet run -- <path-to-capture.saz> --out plan.json
@@ -47,13 +47,13 @@ dotnet run -- <path-to-capture.saz> --out plan.json
 
 This produces:
 
-- `<name>.plan.json` request/response plan
+- `<name>.sessions.json` request/response plan
 - `<name>.auth.json` detected OIDC/OAuth2/Azure B2C authentication flows: correlated flow groups (type, confidence, related sessions), classified variables (configuration/secret/generated/derived/etc.), replay requirements, and warnings
 - `<name>.sources.json` source mapping report
 
 Options:
 
-- `--out <file>`: write JSON to this file instead of the default `<input>.plan.json`
+- `--out <file>`: write JSON to this file instead of the default `<input>.sessions.json`
 - default output is indented JSON
 - `--compact`: compact JSON output
 
@@ -63,7 +63,7 @@ Note: the sources report is always generated.
 
 ```bash
 dotnet run --project app/sws.csproj  -- C:/Users/myusername/Desktop/capture.saz
-dotnet run -- ./capture.saz --out ./capture.plan.json
+dotnet run -- ./capture.saz --out ./capture.sessions.json
 ```
 
 The output is a machine-readable plan you can feed into a later code generator or replay harness.
