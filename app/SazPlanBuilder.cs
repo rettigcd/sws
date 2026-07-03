@@ -80,8 +80,8 @@ internal static class SazPlanBuilder {
 	}
 
 	public static string WriteAllSessionSourcesReport(string outputBasePath, IReadOnlyList<Session> sessions) {
-		var outputPath = Path.ChangeExtension(outputBasePath, ".sources.json");
-		var classifiedSessions = AzureB2cAuthenticationScanner.ClassifyUnknownSessions(sessions);
+		var outputPath = DeriveSiblingOutputPath(outputBasePath, ".sources.json");
+		var classifiedSessions = Auth.SessionClassifier.ClassifyUnknownSessions(sessions);
 		var options = new JsonSerializerOptions {
 			WriteIndented = true,
 			IndentCharacter = '\t',
@@ -109,6 +109,21 @@ internal static class SazPlanBuilder {
 
 		File.WriteAllText(outputPath, JsonSerializer.Serialize(report, options), Encoding.UTF8);
 		return outputPath;
+	}
+
+	/// <summary>
+	/// Derives a sibling report path next to the main plan output, stripping a trailing
+	/// ".plan" segment (if present) so sibling reports read as "<name>.sources.json" rather
+	/// than "<name>.plan.sources.json".
+	/// </summary>
+	internal static string DeriveSiblingOutputPath(string planOutputPath, string suffixWithExtension) {
+		var directory = Path.GetDirectoryName(planOutputPath) ?? string.Empty;
+		var fileName = Path.GetFileName(planOutputPath);
+		var baseName = fileName.EndsWith(".plan.json", StringComparison.OrdinalIgnoreCase)
+			? fileName[..^".plan.json".Length]
+			: Path.GetFileNameWithoutExtension(fileName);
+
+		return Path.Combine(directory, baseName + suffixWithExtension);
 	}
 
 	static GlobalHeadersGroup BuildGlobalHeadersGroup(List<Session> sessions) {

@@ -17,5 +17,6 @@ internal sealed record Request(
 	JsonElement? JsonBody,
 	List<FormBodyEntry>? FormBody,
 	List<string> RegenerationSteps,
-	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] RequestType RequestType = RequestType.Unknown
+	// Classification
+	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] Auth.RequestType RequestType = Auth.RequestType.Unknown
 );

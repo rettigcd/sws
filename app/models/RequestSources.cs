@@ -5,7 +5,7 @@ internal sealed record RequestSources(
 	int SourceSessionId,
 	string Method,
 	string Url,
-	RequestType RequestType,
+	Auth.RequestType RequestType,
 	RequestPlan RequestPlan,
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<RequestSourceFinding>? Findings
 );

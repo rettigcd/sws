@@ -1,6 +1,7 @@
 namespace sws.Tests;
 
 using System.Text.Json;
+using Auth;
 using Shouldly;
 using Xunit;
 
@@ -225,7 +226,8 @@ public class SourceReportBuilder_Tests {
 			new Body(0, null, "none", new List<string>()),
 			null,
 			null,
-			new List<string>()
+			new List<string>(),
+			Auth.ResponseType.Unknown
 		);
 
 		return new Session(sessionId, null, request, response);

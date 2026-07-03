@@ -61,13 +61,13 @@ for (var i = 1; i < args.Length; i++) {
 
 try {
 	var plan = SazPlanBuilder.Build(inputPath, buildOptions);
-	var classifiedSessions = AzureB2cAuthenticationScanner.ClassifyUnknownSessions(plan.Sessions).ToList();
+	var classifiedSessions = Auth.SessionClassifier.ClassifyUnknownSessions(plan.Sessions).ToList();
 	var classifiedPlan = plan with { Sessions = classifiedSessions };
 	var planOutputPath = ResolveOutputPath(inputPath, outputPath);
-	var b2cOutputPath = Path.ChangeExtension(planOutputPath, ".b2c.json");
+	var authOutputPath = SazPlanBuilder.DeriveSiblingOutputPath(planOutputPath, ".auth.json");
 
 	WriteSazPlanAsJson(planOutputPath, pretty, classifiedPlan);
-	WriteAzureB2cReportAsJson(b2cOutputPath, pretty, AzureB2cAuthenticationScanner.Scan(classifiedSessions));
+	WriteAuthFlowReportAsJson(authOutputPath, pretty, Auth.AuthFlowDetector.Detect(classifiedSessions));
 	SazPlanBuilder.WriteAllSessionSourcesReport(planOutputPath, classifiedSessions);
 
 	return 0;
@@ -105,7 +105,11 @@ static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
 	File.WriteAllText(outputPath, json, Encoding.UTF8);
 }
 
-static void WriteAzureB2cReportAsJson(string outputPath, bool pretty, AzureB2cAuthenticationReport report) {
+static void WriteAuthFlowReportAsJson(
+	string outputPath,
+	bool pretty,
+	Auth.AuthFlowDetectionResult report
+) {
 	var json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
 		WriteIndented = pretty,
 		IndentCharacter = '\t',
