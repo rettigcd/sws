@@ -26,15 +26,15 @@ internal static class AuthorizationCodeFlowHandler {
 		if (string.IsNullOrWhiteSpace(flow.ClientId))
 			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingCredentials, "Flow has no client_id."));
 
-		var redirectUri = options.RedirectUriOverride ?? flow.RedirectUri;
+		string? redirectUri = options.RedirectUriOverride ?? flow.RedirectUri;
 		if (string.IsNullOrWhiteSpace(redirectUri))
 			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingRequiredEndpoint, "Flow has no redirect_uri."));
 
-		var clientId = flow.ClientId;
+		string clientId = flow.ClientId;
 		var scopes = options.ScopesOverride ?? flow.Scopes;
-		var isPkce = flow.FlowType == Auth.AuthFlowType.AuthorizationCodeWithPkce;
+		bool isPkce = flow.FlowType == Auth.AuthFlowType.AuthorizationCodeWithPkce;
 
-		var state = OAuthCryptoHelpers.GenerateState();
+		string state = OAuthCryptoHelpers.GenerateState();
 		variables.Add(new ResolvedVariable("state", state, VariableProvenance.Generated));
 
 		string? nonce = null;
@@ -45,10 +45,10 @@ internal static class AuthorizationCodeFlowHandler {
 
 		string? codeVerifier = null;
 		string? codeChallenge = null;
-		var codeChallengeMethod = "S256";
+		string codeChallengeMethod = "S256";
 		if (isPkce) {
 			codeVerifier = OAuthCryptoHelpers.GenerateCodeVerifier();
-			var capturedMethod = flow.Variables.FirstOrDefault(v => v.Name.Equals("code_challenge_method", StringComparison.OrdinalIgnoreCase))?.Value;
+			string? capturedMethod = flow.Variables.FirstOrDefault(v => v.Name.Equals("code_challenge_method", StringComparison.OrdinalIgnoreCase))?.Value;
 			if (!string.IsNullOrWhiteSpace(capturedMethod))
 				codeChallengeMethod = capturedMethod;
 
@@ -75,7 +75,7 @@ internal static class AuthorizationCodeFlowHandler {
 			authorizeQuery["code_challenge_method"] = codeChallengeMethod;
 		}
 
-		foreach (var name in PreservedConfigurationParamNames) {
+		foreach (string name in PreservedConfigurationParamNames) {
 			var captured = flow.Variables.FirstOrDefault(v => v.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && v.Category == Auth.VariableCategory.Configuration);
 			if (captured is null)
 				continue;
@@ -84,11 +84,11 @@ internal static class AuthorizationCodeFlowHandler {
 			variables.Add(new ResolvedVariable(name, captured.Value, VariableProvenance.Discovered, captured.Category));
 		}
 
-		foreach (var name in RegeneratedCorrelationParamNames) {
+		foreach (string name in RegeneratedCorrelationParamNames) {
 			if (!flow.Variables.Any(v => v.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
 				continue;
 
-			var fresh = Guid.NewGuid().ToString();
+			string fresh = Guid.NewGuid().ToString();
 			authorizeQuery[name] = fresh;
 			variables.Add(new ResolvedVariable(name, fresh, VariableProvenance.Generated));
 		}
@@ -97,7 +97,7 @@ internal static class AuthorizationCodeFlowHandler {
 		variables.Add(new ResolvedVariable("redirect_uri", redirectUri, options.RedirectUriOverride is not null ? VariableProvenance.CallerSupplied : VariableProvenance.Discovered, Auth.VariableCategory.Configuration));
 
 		var authorizeUri = BuildUri(endpoints.AuthorizationEndpoint!, authorizeQuery);
-		var useFragmentCallback = string.Equals(flow.B2cDetails?.ResponseMode, "fragment", StringComparison.OrdinalIgnoreCase)
+		bool useFragmentCallback = string.Equals(flow.B2cDetails?.ResponseMode, "fragment", StringComparison.OrdinalIgnoreCase)
 			|| string.Equals(authorizeQuery.GetValueOrDefault("response_mode"), "fragment", StringComparison.OrdinalIgnoreCase);
 
 		var currentRequest = BuildGetRequest(authorizeUri);
@@ -105,8 +105,8 @@ internal static class AuthorizationCodeFlowHandler {
 		var response = await httpClient.SendAsync(currentRequest, cancellationToken).ConfigureAwait(false);
 
 		string? code = null;
-		var redirectHops = 0;
-		var loginHops = 0;
+		int redirectHops = 0;
+		int loginHops = 0;
 
 		while (true) {
 			cancellationToken.ThrowIfCancellationRequested();
@@ -120,8 +120,8 @@ internal static class AuthorizationCodeFlowHandler {
 					var callbackParams = RedirectFollower.ExtractCallbackParameters(location, useFragmentCallback);
 					stepLog.Record("Captured authorization result from redirect to redirect_uri.", httpStatusCode: (int)response.StatusCode, requestUrl: location.ToString());
 
-					if (callbackParams.TryGetValue("error", out var errorCode)) {
-						var errorDescription = callbackParams.GetValueOrDefault("error_description", errorCode);
+					if (callbackParams.TryGetValue("error", out string? errorCode)) {
+						string? errorDescription = callbackParams.GetValueOrDefault("error_description", errorCode);
 						return Failure(flow, stepLog, variables, httpClient, errorMessage: $"Authorization server returned error: {errorDescription}");
 					}
 
@@ -130,7 +130,7 @@ internal static class AuthorizationCodeFlowHandler {
 
 					variables.Add(new ResolvedVariable("code", code, VariableProvenance.Extracted, Auth.VariableCategory.ServerGenerated));
 
-					if (callbackParams.TryGetValue("state", out var returnedState) && !string.Equals(returnedState, state, StringComparison.Ordinal)) {
+					if (callbackParams.TryGetValue("state", out string? returnedState) && !string.Equals(returnedState, state, StringComparison.Ordinal)) {
 						stepLog.Record("Returned state did not match the state sent on the authorization request.", success: false);
 						return Failure(flow, stepLog, variables, httpClient, errorMessage: "Returned state did not match the state sent on the authorization request.");
 					}
@@ -160,8 +160,8 @@ internal static class AuthorizationCodeFlowHandler {
 				if (loginHops > options.MaxLoginPageHops)
 					return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.Other, "Exceeded maximum login-page hop count."));
 
-				var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-				var pageUrl = currentRequest.RequestUri!.ToString();
+				string html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+				string pageUrl = currentRequest.RequestUri!.ToString();
 				var parseResult = await LoginPageParser.ParseAsync(html, pageUrl).ConfigureAwait(false);
 
 				if (parseResult.Outcome != LoginPageParseOutcome.LoginForm) {
@@ -179,8 +179,8 @@ internal static class AuthorizationCodeFlowHandler {
 					return Failure(flow, stepLog, variables, httpClient, errorMessage: "Login form was re-displayed after submission; credentials were likely rejected.");
 
 				var form = parseResult.Form!;
-				var username = options.UsernameOverride ?? capturedCredentials.Username;
-				var password = options.PasswordOverride ?? capturedCredentials.Password;
+				string username = options.UsernameOverride ?? capturedCredentials.Username;
+				string password = options.PasswordOverride ?? capturedCredentials.Password;
 				variables.Add(new ResolvedVariable(
 					"username", username,
 					options.UsernameOverride is not null ? VariableProvenance.CallerSupplied : VariableProvenance.Discovered,
@@ -204,7 +204,7 @@ internal static class AuthorizationCodeFlowHandler {
 				};
 				HeaderHelpers.Apply(postRequest);
 
-				var hiddenFieldNames = form.HiddenFields.Count > 0 ? $" incl. {string.Join(", ", form.HiddenFields.Select(f => $"'{f.Name}'"))}" : string.Empty;
+				string hiddenFieldNames = form.HiddenFields.Count > 0 ? $" incl. {string.Join(", ", form.HiddenFields.Select(f => $"'{f.Name}'"))}" : string.Empty;
 				stepLog.Record($"Submitted login form ({form.HiddenFields.Count} hidden field(s){hiddenFieldNames}).", requestUrl: form.ActionUrl);
 
 				currentRequest = postRequest;
@@ -228,9 +228,9 @@ internal static class AuthorizationCodeFlowHandler {
 		if (isPkce)
 			tokenFields["code_verifier"] = codeVerifier!;
 
-		var requiresSecret = flow.ReplayRequirements.Any(r => r.Kind == Auth.ReplayRequirementKind.RequireClientSecret);
+		bool requiresSecret = flow.ReplayRequirements.Any(r => r.Kind == Auth.ReplayRequirementKind.RequireClientSecret);
 		if (requiresSecret) {
-			var clientSecret = options.ClientSecretOverride
+			string? clientSecret = options.ClientSecretOverride
 				?? flow.Variables.FirstOrDefault(v => v.Category == Auth.VariableCategory.Secret && v.Name.Equals("client_secret", StringComparison.OrdinalIgnoreCase))?.Value;
 
 			if (string.IsNullOrWhiteSpace(clientSecret))
@@ -259,7 +259,7 @@ internal static class AuthorizationCodeFlowHandler {
 
 	static Uri BuildUri(string baseUrl, Dictionary<string, string> query) {
 		var pairs = query.Select(pair => $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}");
-		var separator = baseUrl.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+		string separator = baseUrl.Contains('?', StringComparison.Ordinal) ? "&" : "?";
 		return new Uri($"{baseUrl}{separator}{string.Join("&", pairs)}");
 	}
 

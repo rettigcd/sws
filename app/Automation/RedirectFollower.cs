@@ -18,20 +18,20 @@ internal static class RedirectFollower {
 	/// whichever the flow's response_mode indicates, falling back to the other if empty.
 	/// </summary>
 	public static Dictionary<string, string> ExtractCallbackParameters(Uri location, bool preferFragment) {
-		var primary = preferFragment ? location.Fragment.TrimStart('#') : location.Query.TrimStart('?');
+		string primary = preferFragment ? location.Fragment.TrimStart('#') : location.Query.TrimStart('?');
 		var parameters = ParseFormEncoded(primary);
 		if (parameters.Count > 0)
 			return parameters;
 
-		var secondary = preferFragment ? location.Query.TrimStart('?') : location.Fragment.TrimStart('#');
+		string secondary = preferFragment ? location.Query.TrimStart('?') : location.Fragment.TrimStart('#');
 		return ParseFormEncoded(secondary);
 	}
 
 	static Dictionary<string, string> ParseFormEncoded(string raw) {
 		var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		foreach (var piece in raw.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string piece in raw.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = piece.Split('=', 2);
-			var key = Uri.UnescapeDataString(parts[0]);
+			string key = Uri.UnescapeDataString(parts[0]);
 			if (string.IsNullOrWhiteSpace(key))
 				continue;
 

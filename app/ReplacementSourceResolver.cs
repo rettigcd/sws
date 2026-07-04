@@ -32,12 +32,12 @@ internal static class ReplacementSourceResolver {
 				continue;
 			}
 
-			if (isAzureB2cFlowSession && TryBuildAzureB2cSourceReference(replacement.Placeholder, out var azureB2cSource)) {
+			if (isAzureB2cFlowSession && TryBuildAzureB2cSourceReference(replacement.Placeholder, out string azureB2cSource)) {
 				replacement.Source = azureB2cSource;
 				continue;
 			}
 
-			var missingKey = replacement.Placeholder;
+			string missingKey = replacement.Placeholder;
 			if (missing is not null)
 				missingKey = registerMissingValue(missing, replacement.Placeholder, replacement.OriginalValue);
 
@@ -50,14 +50,14 @@ internal static class ReplacementSourceResolver {
 		if (string.IsNullOrWhiteSpace(placeholder))
 			return false;
 
-		var trimmed = placeholder.Trim();
+		string trimmed = placeholder.Trim();
 		if (trimmed.StartsWith("{", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal) && trimmed.Length > 2)
 			trimmed = trimmed[1..^1];
 
 		if (trimmed.Length == 0)
 			return false;
 
-		var key = StripNumericSuffix(trimmed);
+		string key = StripNumericSuffix(trimmed);
 		if (!AzureB2cFlowValueKeys.Contains(key))
 			return false;
 
@@ -66,11 +66,11 @@ internal static class ReplacementSourceResolver {
 	}
 
 	static string StripNumericSuffix(string value) {
-		var lastUnderscore = value.LastIndexOf('_');
+		int lastUnderscore = value.LastIndexOf('_');
 		if (lastUnderscore <= 0 || lastUnderscore >= value.Length - 1)
 			return value;
 
-		for (var i = lastUnderscore + 1; i < value.Length; i++)
+		for (int i = lastUnderscore + 1; i < value.Length; i++)
 			if (!char.IsDigit(value[i]))
 				return value;
 

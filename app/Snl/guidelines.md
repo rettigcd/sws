@@ -8,6 +8,9 @@ instructions are given; one-off feature requests (e.g. "add a step that does X")
   - Exception: `Automation.IAuthHttpClient` is reused directly as the HTTP abstraction rather than
     redefining an equivalent interface.
 
+- **Style**: for base types (`int`, `string`, `float`, `double`, `bool`), declare the exact type instead
+  of `var`.
+
 - **`Context`**:
   - Holds all variables required to complete the session. Passed to static `Steps` methods. Also
     holds results produced by steps.

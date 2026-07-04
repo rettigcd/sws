@@ -21,20 +21,20 @@ internal static class B2cDetector {
 		string? tenant = null;
 		string? policy = null;
 
-		foreach (var segment in uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string segment in uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)) {
 			if (tenant is null && segment.Contains(".onmicrosoft.com", StringComparison.OrdinalIgnoreCase))
 				tenant = segment;
 			else if (policy is null && IsPolicyName(segment))
 				policy = segment;
 		}
 
-		if (policy is null && request.QueryParameters.TryGetValue("p", out var policyParam) && !string.IsNullOrWhiteSpace(policyParam))
+		if (policy is null && request.QueryParameters.TryGetValue("p", out string? policyParam) && !string.IsNullOrWhiteSpace(policyParam))
 			policy = policyParam;
 
 		if (tenant is null && uri.Host.EndsWith(".b2clogin.com", StringComparison.OrdinalIgnoreCase))
 			tenant = uri.Host[..uri.Host.IndexOf('.')];
 
-		var authorityBaseUrl = $"{uri.Scheme}://{uri.Host}";
+		string authorityBaseUrl = $"{uri.Scheme}://{uri.Host}";
 		return (tenant, policy, authorityBaseUrl);
 	}
 

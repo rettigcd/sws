@@ -42,7 +42,7 @@ public static class InterestingFinder {
 		if (labels.Length < 2)
 			return false;
 
-		foreach (var label in labels)
+		foreach (string label in labels)
 		{
 			if (label.Length is < 1 or > 63)
 				return false;
@@ -60,7 +60,7 @@ public static class InterestingFinder {
 			}
 		}
 
-		var tld = labels[^1];
+		string tld = labels[^1];
 
 		if (tld.Length < 2)
 			return false;
@@ -90,18 +90,18 @@ public static class InterestingFinder {
 		if (token.Length == 0)
 			return false;
 
-		var start = 0;
+		int start = 0;
 		if (token.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
 			start = 2;
 
 		if (start >= token.Length)
 			return false;
 
-		for (var i = start; i < token.Length; i++)
+		for (int i = start; i < token.Length; i++)
 			if (!Uri.IsHexDigit(token[i]))
 				return false;
 
-		for (var i = start; i < token.Length; i++)
+		for (int i = start; i < token.Length; i++)
 			if (!char.IsDigit(token[i]))
 				return true;
 

@@ -15,7 +15,7 @@ internal static class Steps {
 	/// </returns>
 	public static async Task<StepResult> LoadWellKnownConfigurationAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
-		var wellKnownEndpoint = ctx.WellKnownEndpoint ?? throw new InvalidOperationException("Context.WellKnownEndpoint is not set.");
+		string wellKnownEndpoint = ctx.WellKnownEndpoint ?? throw new InvalidOperationException("Context.WellKnownEndpoint is not set.");
 
 		var request = new HttpRequestMessage(HttpMethod.Get, wellKnownEndpoint);
 		var response = await http.SendAsync(request);
@@ -23,7 +23,7 @@ internal static class Steps {
 		if (!response.IsSuccessStatusCode)
 			throw new InvalidOperationException($"Well-known endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
-		var json = await response.Content.ReadAsStringAsync();
+		string json = await response.Content.ReadAsStringAsync();
 		var config = JsonSerializer.Deserialize<WellKnownConfiguration>(json)
 			?? throw new InvalidOperationException("Well-known endpoint response could not be deserialized.");
 
@@ -38,7 +38,7 @@ internal static class Steps {
 	/// </returns>
 	public static async Task<StepResult> SendAuthorizationRequestAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
-		var authorizationEndpoint = ctx.WellKnown?.AuthorizationEndpoint
+		string authorizationEndpoint = ctx.WellKnown?.AuthorizationEndpoint
 			?? throw new InvalidOperationException("WellKnown.AuthorizationEndpoint is not available. Call LoadWellKnownConfigurationAsync first.");
 
 		var requestUri = BuildAuthorizeRequestUri(ctx, authorizationEndpoint);
@@ -62,8 +62,8 @@ internal static class Steps {
 		}
 
 		if (IsHtmlResponse(response)) {
-			var html = await response.Content.ReadAsStringAsync();
-			var pageUrl = requestUri.ToString();
+			string html = await response.Content.ReadAsStringAsync();
+			string pageUrl = requestUri.ToString();
 			var browsingContext = BrowsingContext.New(Configuration.Default);
 			var document = await browsingContext.OpenAsync(req => req.Content(html).Address(pageUrl)).ConfigureAwait(false);
 
@@ -90,15 +90,15 @@ internal static class Steps {
 	/// unmodified at token exchange).
 	/// </summary>
 	static Uri BuildAuthorizeRequestUri(Context ctx, string authorizationEndpoint) {
-		var clientId = ctx.ClientId ?? throw new InvalidOperationException("Context.ClientId is not set.");
-		var redirectUri = ctx.RedirectUri ?? throw new InvalidOperationException("Context.RedirectUri is not set.");
-		var scope = ctx.Scope ?? throw new InvalidOperationException("Context.Scope is not set.");
+		string clientId = ctx.ClientId ?? throw new InvalidOperationException("Context.ClientId is not set.");
+		string redirectUri = ctx.RedirectUri ?? throw new InvalidOperationException("Context.RedirectUri is not set.");
+		string scope = ctx.Scope ?? throw new InvalidOperationException("Context.Scope is not set.");
 
 		ctx.State = Crypto.GenerateState();
 		ctx.CodeVerifier = Crypto.GenerateCodeVerifier();
 		ctx.CodeChallenge = Crypto.DeriveCodeChallengeS256(ctx.CodeVerifier);
 
-		var query = string.Join('&', [
+		string query = string.Join('&', [
 			"response_type=code",
 			$"client_id={Uri.EscapeDataString(clientId)}",
 			$"redirect_uri={Uri.EscapeDataString(redirectUri)}",
@@ -116,17 +116,17 @@ internal static class Steps {
 	/// redirect URI or from form_post hidden inputs), validates them, and stores the code on ctx.
 	/// </summary>
 	static void CaptureAuthorizationResult(Context ctx, Func<string, string?> lookup) {
-		var error = lookup("error");
+		string? error = lookup("error");
 		if (error is not null) {
-			var errorDescription = lookup("error_description") ?? error;
+			string errorDescription = lookup("error_description") ?? error;
 			throw new InvalidOperationException($"Authorization server returned error: {errorDescription}");
 		}
 
-		var code = lookup("code");
+		string? code = lookup("code");
 		if (string.IsNullOrEmpty(code))
 			throw new InvalidOperationException("Authorization response did not include a code.");
 
-		var returnedState = lookup("state");
+		string? returnedState = lookup("state");
 		if (!string.IsNullOrEmpty(ctx.State) && !string.IsNullOrEmpty(returnedState) && !string.Equals(returnedState, ctx.State, StringComparison.Ordinal))
 			throw new InvalidOperationException("Returned state did not match the state sent on the authorization request.");
 
@@ -141,9 +141,9 @@ internal static class Steps {
 
 	static Dictionary<string, string> ParseFormEncoded(string raw) {
 		var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		foreach (var piece in raw.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string piece in raw.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = piece.Split('=', 2);
-			var key = Uri.UnescapeDataString(parts[0].Replace('+', ' '));
+			string key = Uri.UnescapeDataString(parts[0].Replace('+', ' '));
 			if (!string.IsNullOrWhiteSpace(key))
 				result[key] = parts.Length > 1 ? Uri.UnescapeDataString(parts[1].Replace('+', ' ')) : string.Empty;
 		}
@@ -158,10 +158,10 @@ internal static class Steps {
 	/// </returns>
 	public static async Task<StepResult> LoginWithUsernameAndPasswordAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
-		var username = ctx.Username ?? throw new InvalidOperationException("Context.Username is not set.");
-		var password = ctx.Password ?? throw new InvalidOperationException("Context.Password is not set.");
-		var html = ctx.LoginPageHtml ?? throw new InvalidOperationException("Context.LoginPageHtml is not set. Call SendAuthorizationRequestAsync first and ensure it returned StepResult.LoginPage.");
-		var pageUrl = ctx.LoginPageUrl ?? throw new InvalidOperationException("Context.LoginPageUrl is not set. Call SendAuthorizationRequestAsync first and ensure it returned StepResult.LoginPage.");
+		string username = ctx.Username ?? throw new InvalidOperationException("Context.Username is not set.");
+		string password = ctx.Password ?? throw new InvalidOperationException("Context.Password is not set.");
+		string html = ctx.LoginPageHtml ?? throw new InvalidOperationException("Context.LoginPageHtml is not set. Call SendAuthorizationRequestAsync first and ensure it returned StepResult.LoginPage.");
+		string pageUrl = ctx.LoginPageUrl ?? throw new InvalidOperationException("Context.LoginPageUrl is not set. Call SendAuthorizationRequestAsync first and ensure it returned StepResult.LoginPage.");
 
 		var browsingContext = BrowsingContext.New(Configuration.Default);
 		var document = await browsingContext.OpenAsync(req => req.Content(html).Address(pageUrl)).ConfigureAwait(false);
@@ -221,12 +221,12 @@ internal static class Steps {
 	/// </returns>
 	public static async Task<StepResult> ExchangeCodeForTokensAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
-		var tokenEndpoint = ctx.WellKnown?.TokenEndpoint
+		string tokenEndpoint = ctx.WellKnown?.TokenEndpoint
 			?? throw new InvalidOperationException("WellKnown.TokenEndpoint is not available. Call LoadWellKnownConfigurationAsync first.");
-		var code = ctx.Code ?? throw new InvalidOperationException("Context.Code is not set. Call SendAuthorizationRequestAsync first.");
-		var codeVerifier = ctx.CodeVerifier ?? throw new InvalidOperationException("Context.CodeVerifier is not set. Call SendAuthorizationRequestAsync first.");
-		var clientId = ctx.ClientId ?? throw new InvalidOperationException("Context.ClientId is not set.");
-		var redirectUri = ctx.RedirectUri ?? throw new InvalidOperationException("Context.RedirectUri is not set.");
+		string code = ctx.Code ?? throw new InvalidOperationException("Context.Code is not set. Call SendAuthorizationRequestAsync first.");
+		string codeVerifier = ctx.CodeVerifier ?? throw new InvalidOperationException("Context.CodeVerifier is not set. Call SendAuthorizationRequestAsync first.");
+		string clientId = ctx.ClientId ?? throw new InvalidOperationException("Context.ClientId is not set.");
+		string redirectUri = ctx.RedirectUri ?? throw new InvalidOperationException("Context.RedirectUri is not set.");
 
 		var request = new HttpRequestMessage(HttpMethod.Post, tokenEndpoint) {
 			Content = new FormUrlEncodedContent(new Dictionary<string, string> {
@@ -239,7 +239,7 @@ internal static class Steps {
 		};
 
 		var response = await http.SendAsync(request);
-		var json = await response.Content.ReadAsStringAsync();
+		string json = await response.Content.ReadAsStringAsync();
 
 		if (!response.IsSuccessStatusCode)
 			throw new InvalidOperationException($"Token endpoint returned {(int)response.StatusCode} {response.StatusCode}: {ExtractTokenErrorMessage(json)}");

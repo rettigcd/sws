@@ -24,8 +24,8 @@ internal static class SazMetadataParser {
 		}
 
 		foreach (var flag in doc.Descendants("SessionFlag")) {
-			var key = flag.Attribute("N")?.Value;
-			var value = flag.Attribute("V")?.Value;
+			string? key = flag.Attribute("N")?.Value;
+			string? value = flag.Attribute("V")?.Value;
 			if (!string.IsNullOrWhiteSpace(key) && value is not null)
 				flags[key] = value;
 		}
@@ -39,12 +39,12 @@ internal static class SazMetadataParser {
 	}
 
 	private static void LogMalformedMetadata(int sessionId, byte[] metadataBytes, Exception ex) {
-		var utc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
-		var utf8 = Encoding.UTF8.GetString(metadataBytes);
-		var latin1 = Encoding.Latin1.GetString(metadataBytes);
-		var base64 = Convert.ToBase64String(metadataBytes);
+		string utc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+		string utf8 = Encoding.UTF8.GetString(metadataBytes);
+		string latin1 = Encoding.Latin1.GetString(metadataBytes);
+		string base64 = Convert.ToBase64String(metadataBytes);
 
-		var entry = $"[{utc}] Session {sessionId} malformed metadata. "
+		string entry = $"[{utc}] Session {sessionId} malformed metadata. "
 			+ $"Length={metadataBytes.Length}. Error={ex.GetType().Name}: {ex.Message}{Environment.NewLine}"
 			+ $"UTF8:{Environment.NewLine}{utf8}{Environment.NewLine}"
 			+ $"Latin1:{Environment.NewLine}{latin1}{Environment.NewLine}"

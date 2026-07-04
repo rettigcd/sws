@@ -18,7 +18,7 @@ internal static class JwtDecoder {
 			return [];
 
 		try {
-			var payloadJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
+			string payloadJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
 			using var document = JsonDocument.Parse(payloadJson);
 
 			var claims = new List<Claim>();
@@ -45,7 +45,7 @@ internal static class JwtDecoder {
 	}
 
 	static byte[] Base64UrlDecode(string value) {
-		var padded = value.Replace('-', '+').Replace('_', '/');
+		string padded = value.Replace('-', '+').Replace('_', '/');
 		padded += new string('=', (4 - padded.Length % 4) % 4);
 		return Convert.FromBase64String(padded);
 	}

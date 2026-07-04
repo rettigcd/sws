@@ -4,6 +4,7 @@ namespace Snl;
 // raw response (shop address/geo/phone, topic details, description, image/banner URLs, waitlist
 // counts, etc.) but weren't needed on this first pass - add them here if a Steps method needs them.
 internal record EventMetadata(
+	int Id,
 	string Identifier,
 	string Title,
 	string StartIso,

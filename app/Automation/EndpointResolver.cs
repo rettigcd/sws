@@ -32,10 +32,10 @@ internal static class EndpointResolver {
 			);
 		}
 
-		var authorizationEndpoint = FindCapturedEndpoint(sessions, flow.AuthorizationRequestSessionId);
-		var tokenEndpoint = FindCapturedEndpoint(sessions, flow.TokenRequestSessionId);
+		string? authorizationEndpoint = FindCapturedEndpoint(sessions, flow.AuthorizationRequestSessionId);
+		string? tokenEndpoint = FindCapturedEndpoint(sessions, flow.TokenRequestSessionId);
 		if (authorizationEndpoint is not null || tokenEndpoint is not null) {
-			var sourceId = flow.AuthorizationRequestSessionId ?? flow.TokenRequestSessionId;
+			int? sourceId = flow.AuthorizationRequestSessionId ?? flow.TokenRequestSessionId;
 			return new ResolvedEndpoints(authorizationEndpoint, tokenEndpoint, flow.Issuer, $"captured-session:{sourceId}");
 		}
 

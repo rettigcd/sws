@@ -33,8 +33,8 @@ internal static class DiscoveryDocumentParser {
 		if (session.Response.ResponseJson is not { ValueKind: JsonValueKind.Object } json)
 			return null;
 
-		var issuer = GetString(json, "issuer");
-		var authorizationEndpoint = GetString(json, "authorization_endpoint");
+		string? issuer = GetString(json, "issuer");
+		string? authorizationEndpoint = GetString(json, "authorization_endpoint");
 		if (issuer is null && authorizationEndpoint is null)
 			return null;
 

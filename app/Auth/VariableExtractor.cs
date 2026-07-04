@@ -75,10 +75,10 @@ internal static class VariableExtractor {
 
 		if (session.Response.ResponseJson is { ValueKind: JsonValueKind.Object } json)
 			foreach (var property in json.EnumerateObject())
-				if (TryGetScalarString(property.Value, out var value))
+				if (TryGetScalarString(property.Value, out string value))
 					Add(variables, property.Name, value, VariableSource.JsonBodyField, session.SessionId, jsonPath: $"$.{property.Name}");
 
-		if (session.Response.Headers.TryGetValue("Location", out var location) && Uri.TryCreate(location, UriKind.Absolute, out var locationUri)) {
+		if (session.Response.Headers.TryGetValue("Location", out string? location) && Uri.TryCreate(location, UriKind.Absolute, out var locationUri)) {
 			foreach (var pair in ParseQuery(locationUri.Query))
 				Add(variables, pair.Key, pair.Value, VariableSource.RedirectUrlParameter, session.SessionId);
 
@@ -93,7 +93,7 @@ internal static class VariableExtractor {
 			return;
 
 		var category = Classify(name, value, source);
-		var derivedFrom = category == VariableCategory.Derived ? "code_verifier" : null;
+		string? derivedFrom = category == VariableCategory.Derived ? "code_verifier" : null;
 		variables.Add(new Variable(name, value, category, source, sessionId, jsonPath, derivedFrom));
 	}
 
@@ -122,7 +122,7 @@ internal static class VariableExtractor {
 		if (ConfigurationKeys.Contains(name))
 			return VariableCategory.Configuration;
 
-		foreach (var hint in NonParticipatingHints)
+		foreach (string hint in NonParticipatingHints)
 			if (name.Contains(hint, StringComparison.OrdinalIgnoreCase))
 				return VariableCategory.NonParticipating;
 
@@ -149,13 +149,13 @@ internal static class VariableExtractor {
 		if (string.IsNullOrWhiteSpace(query))
 			yield break;
 
-		foreach (var piece in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string piece in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = piece.Split('=', 2);
-			var key = Uri.UnescapeDataString(parts[0]);
+			string key = Uri.UnescapeDataString(parts[0]);
 			if (string.IsNullOrWhiteSpace(key))
 				continue;
 
-			var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+			string value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
 			yield return new KeyValuePair<string, string>(key, value);
 		}
 	}

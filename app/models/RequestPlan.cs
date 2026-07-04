@@ -127,7 +127,7 @@ internal sealed class RequestPlan {
 
 		if (JsonBody is JsonElement jsonBody) {
 			var resolvedJson = ResolveJsonBodyPlaceholders(jsonBody);
-			var json = JsonSerializer.Serialize(resolvedJson);
+			string json = JsonSerializer.Serialize(resolvedJson);
 			return new StringContent(json, Encoding.UTF8, "application/json");
 		}
 
@@ -151,7 +151,7 @@ internal sealed class RequestPlan {
 		if (requestUri is null)
 			return;
 
-		var host = requestUri.IdnHost;
+		string host = requestUri.IdnHost;
 		if (requestUri.HostNameType == UriHostNameType.IPv6)
 			host = $"[{host}]";
 
@@ -186,7 +186,7 @@ internal sealed class RequestPlan {
 		if (Cookies.Count == 0)
 			return;
 
-		var cookieHeader = string.Join("; ", Cookies.Select(cookie => $"{cookie.Key}={cookie.Value}"));
+		string cookieHeader = string.Join("; ", Cookies.Select(cookie => $"{cookie.Key}={cookie.Value}"));
 		message.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
 	}
 
@@ -194,12 +194,12 @@ internal sealed class RequestPlan {
 		int placeholderIndex = 0;
 		var parts = value.Split('/', StringSplitOptions.None);
 
-		for (var i = 0; i < parts.Length; i++) {
-			var part = parts[i];
+		for (int i = 0; i < parts.Length; i++) {
+			string part = parts[i];
 			if (!InterestingFinder.IsInteresting(part))
 				continue;
 
-			var placeholder = $"{{P{placeholderIndex.ToString(CultureInfo.InvariantCulture)}}}";
+			string placeholder = $"{{P{placeholderIndex.ToString(CultureInfo.InvariantCulture)}}}";
 			placeholderIndex++;
 			Replacements[placeholder] = new Replacement {
 				OriginalValue = part,
@@ -220,7 +220,7 @@ internal sealed class RequestPlan {
 				continue;
 			}
 
-			var placeholder = CreateReplacementPlaceholder(pair.Key, pair.Value);
+			string placeholder = CreateReplacementPlaceholder(pair.Key, pair.Value);
 			normalized[pair.Key] = placeholder;
 		}
 
@@ -236,7 +236,7 @@ internal sealed class RequestPlan {
 				continue;
 			}
 
-			var placeholder = CreateReplacementPlaceholder(entry.Key, entry.Value);
+			string placeholder = CreateReplacementPlaceholder(entry.Key, entry.Value);
 			normalized.Add(new FormBodyEntry(entry.Key, placeholder));
 		}
 
@@ -285,8 +285,8 @@ internal sealed class RequestPlan {
 				return clone;
 			}
 			case JsonValue value:
-				if (value.TryGetValue<string>(out var stringValue) && InterestingFinder.IsInteresting(stringValue)) {
-					var placeholder = CreateReplacementPlaceholder(currentName, stringValue);
+				if (value.TryGetValue<string>(out string? stringValue) && InterestingFinder.IsInteresting(stringValue)) {
+					string placeholder = CreateReplacementPlaceholder(currentName, stringValue);
 					return JsonValue.Create(placeholder)!;
 				}
 
@@ -320,7 +320,7 @@ internal sealed class RequestPlan {
 				return clone;
 			}
 			case JsonValue value:
-				if (value.TryGetValue<string>(out var stringValue))
+				if (value.TryGetValue<string>(out string? stringValue))
 					return JsonValue.Create(transform(stringValue))!;
 
 				return value.DeepClone();
@@ -330,9 +330,9 @@ internal sealed class RequestPlan {
 	}
 
 	string CreateReplacementPlaceholder(string name, string value) {
-		var normalizedName = string.IsNullOrWhiteSpace(name) ? "value" : name;
-		var placeholder = $"{{{normalizedName}}}";
-		var collisionIndex = 1;
+		string normalizedName = string.IsNullOrWhiteSpace(name) ? "value" : name;
+		string placeholder = $"{{{normalizedName}}}";
+		int collisionIndex = 1;
 
 		while (Replacements.ContainsKey(placeholder)) {
 			placeholder = $"{{{normalizedName}_{collisionIndex.ToString(CultureInfo.InvariantCulture)}}}";
@@ -353,7 +353,7 @@ internal sealed class RequestPlan {
 	}
 
 	string ResolvePlaceholders(string value) {
-		var resolved = value;
+		string resolved = value;
 		foreach (var replacement in Replacements.Values)
 			resolved = resolved.Replace(replacement.Placeholder, replacement.GetValue(), StringComparison.Ordinal);
 
@@ -361,14 +361,14 @@ internal sealed class RequestPlan {
 	}
 
 	string BuildRequestUri() {
-		var baseUrl = NonQueryUrlFormat;
+		string baseUrl = NonQueryUrlFormat;
 		foreach (var replacement in Replacements.Values)
 			baseUrl = baseUrl.Replace(replacement.Placeholder, replacement.GetValue(), StringComparison.Ordinal);
 
 		if (QueryParameters is null || QueryParameters.Count == 0)
 			return baseUrl;
 
-		var query = QueryParameters
+		string query = QueryParameters
 			.Select(pair => $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(ResolvePlaceholders(pair.Value))}")
 			.Join("&");
 
@@ -378,7 +378,7 @@ internal sealed class RequestPlan {
 	}
 
 	static string GetNonQueryUrl(string url) {
-		var queryStart = url.IndexOf('?', StringComparison.Ordinal);
+		int queryStart = url.IndexOf('?', StringComparison.Ordinal);
 		if (queryStart < 0)
 			return url;
 
@@ -390,13 +390,13 @@ internal sealed class RequestPlan {
 		if (!httpVersion.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
 			return HttpVersion.Version11;
 
-		var versionText = httpVersion[prefix.Length..];
+		string versionText = httpVersion[prefix.Length..];
 		if (Version.TryParse(versionText, out var parsedVersion))
 			return parsedVersion;
 
-		if (double.TryParse(versionText, NumberStyles.Float, CultureInfo.InvariantCulture, out var asDouble)) {
-			var major = (int)Math.Truncate(asDouble);
-			var minor = (int)Math.Round((asDouble - major) * 10d);
+		if (double.TryParse(versionText, NumberStyles.Float, CultureInfo.InvariantCulture, out double asDouble)) {
+			int major = (int)Math.Truncate(asDouble);
+			int minor = (int)Math.Round((asDouble - major) * 10d);
 			return new Version(major, minor);
 		}
 

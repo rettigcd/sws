@@ -4,10 +4,10 @@ using System.Text.Json;
 
 internal static class BodyAnalyzer {
 	public static Body BuildBodyPlan(Dictionary<string, string> headers, byte[] bodyBytes) {
-		var contentType = GetHeader(headers, "Content-Type");
-		var bodyText = DecodeBodyText(headers, bodyBytes);
+		string? contentType = GetHeader(headers, "Content-Type");
+		string bodyText = DecodeBodyText(headers, bodyBytes);
 
-		var format = GuessBodyFormat(contentType, bodyText);
+		string format = GuessBodyFormat(contentType, bodyText);
 
 		var schemaHints = new List<string>();
 		if (format == "json" && !string.IsNullOrWhiteSpace(bodyText))
@@ -33,7 +33,7 @@ internal static class BodyAnalyzer {
 	}
 
 	static byte[] DecompressIfNeeded(Dictionary<string, string> headers, byte[] bodyBytes) {
-		var contentEncoding = GetHeader(headers, "Content-Encoding");
+		string? contentEncoding = GetHeader(headers, "Content-Encoding");
 
 		try {
 			if (string.Equals(contentEncoding, "br", StringComparison.OrdinalIgnoreCase)) {
@@ -63,7 +63,7 @@ internal static class BodyAnalyzer {
 		if (string.IsNullOrEmpty(bodyText))
 			return null;
 
-		var contentType = GetHeader(headers, "Content-Type") ?? string.Empty;
+		string contentType = GetHeader(headers, "Content-Type") ?? string.Empty;
 		if (contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase) 
 			|| contentType.Contains("html", StringComparison.OrdinalIgnoreCase)
 			|| contentType.Contains("javascript", StringComparison.OrdinalIgnoreCase) 
@@ -110,19 +110,19 @@ internal static class BodyAnalyzer {
 	}
 
 	static string? GetHeader(Dictionary<string, string> headers, string name) {
-		return headers.TryGetValue(name, out var value) ? value : null;
+		return headers.TryGetValue(name, out string? value) ? value : null;
 	}
 
 	static Encoding? DetectEncoding(Dictionary<string, string> headers) {
-		var contentType = GetHeader(headers, "Content-Type");
+		string? contentType = GetHeader(headers, "Content-Type");
 		if (string.IsNullOrWhiteSpace(contentType))
 			return null;
 
-		var charsetIndex = contentType.IndexOf("charset=", StringComparison.OrdinalIgnoreCase);
+		int charsetIndex = contentType.IndexOf("charset=", StringComparison.OrdinalIgnoreCase);
 		if (charsetIndex < 0)
 			return null;
 
-		var charset = contentType[(charsetIndex + "charset=".Length)..].Trim().Trim(';').Trim('"');
+		string charset = contentType[(charsetIndex + "charset=".Length)..].Trim().Trim(';').Trim('"');
 		if (charset.Length == 0)
 			return null;
 
@@ -144,7 +144,7 @@ internal static class BodyAnalyzer {
 	}
 
 	private static string GuessBodyFormat(string? contentType, string bodyText) {
-		var ct = contentType?.ToLowerInvariant() ?? string.Empty;
+		string ct = contentType?.ToLowerInvariant() ?? string.Empty;
 
 		if (ct.Contains("application/json") || bodyText.TrimStart().StartsWith('{') || bodyText.TrimStart().StartsWith('[')) {
 			return "json";
@@ -192,18 +192,18 @@ internal static class BodyAnalyzer {
 	private static List<FormBodyEntry> ParseFormPairs(string bodyText) {
 		var pairs = new List<FormBodyEntry>();
 
-		foreach (var kvp in bodyText.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
+		foreach (string kvp in bodyText.Split('&', StringSplitOptions.RemoveEmptyEntries)) {
 			var parts = kvp.Split('=', 2);
 			if (parts.Length == 0) {
 				continue;
 			}
 
-			var key = DecodeFormComponent(parts[0]);
+			string key = DecodeFormComponent(parts[0]);
 			if (string.IsNullOrWhiteSpace(key)) {
 				continue;
 			}
 
-			var value = parts.Length > 1 ? DecodeFormComponent(parts[1]) : string.Empty;
+			string value = parts.Length > 1 ? DecodeFormComponent(parts[1]) : string.Empty;
 			pairs.Add(new FormBodyEntry(key, value));
 		}
 

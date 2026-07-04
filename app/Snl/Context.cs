@@ -27,4 +27,16 @@ internal class Context {
 	// Value of the "Q-BW-USER-ID" cookie set by GetIndexPageAsync.
 	public string? BwUserId { get; set; }
 
+	// Attendee details for CreateBookingAsync. Set after instantiation, before CreateBookingAsync is called.
+	public string? FirstName { get; set; }
+	public string? LastName { get; set; }
+	public string? Email { get; set; }
+	public string? MobileNumber { get; set; }
+
+	// Attendee group size for CreateBookingAsync. Defaults to 1.
+	public int GroupSize { get; set; } = 1;
+
+	// Booking confirmation reference number, e.g. "TI9KMM13KRG", populated by CreateBookingAsync.
+	public string? BookingReferenceNumber { get; set; }
+
 }

@@ -14,7 +14,7 @@ internal static class TokenExchange {
 		HttpResponseMessage tokenResponse,
 		CancellationToken cancellationToken
 	) {
-		var body = await tokenResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+		string body = await tokenResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 		var obtainedAtUtc = DateTimeOffset.UtcNow;
 
 		JsonDocument? document = null;
@@ -26,7 +26,7 @@ internal static class TokenExchange {
 		}
 
 		if (!tokenResponse.IsSuccessStatusCode || document is null) {
-			var errorMessage = ExtractErrorMessage(document, tokenResponse.StatusCode);
+			string errorMessage = ExtractErrorMessage(document, tokenResponse.StatusCode);
 			stepLog.Record("Token exchange failed.", success: false, httpStatusCode: (int)tokenResponse.StatusCode);
 			return new AutomationResult(false, flow.FlowId, flow.FlowType, null, ExtractCookies(httpClient), [], stepLog.ToList(), variables, null, errorMessage);
 		}
@@ -96,8 +96,8 @@ internal static class TokenExchange {
 			return null;
 
 		return value.ValueKind switch {
-			JsonValueKind.Number when value.TryGetInt32(out var intValue) => intValue,
-			JsonValueKind.String when int.TryParse(value.GetString(), out var parsed) => parsed,
+			JsonValueKind.Number when value.TryGetInt32(out int intValue) => intValue,
+			JsonValueKind.String when int.TryParse(value.GetString(), out int parsed) => parsed,
 			_ => null,
 		};
 	}

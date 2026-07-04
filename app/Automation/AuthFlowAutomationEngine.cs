@@ -17,7 +17,7 @@ internal static class AuthFlowAutomationEngine {
 		CancellationToken cancellationToken = default
 	) {
 		options ??= new AutomationOptions();
-		var ownsHttpClient = options.HttpClient is null;
+		bool ownsHttpClient = options.HttpClient is null;
 		var httpClient = options.HttpClient ?? new SystemNetAuthHttpClient(options.HttpTimeout);
 
 		try {
@@ -50,7 +50,7 @@ internal static class AuthFlowAutomationEngine {
 		CancellationToken cancellationToken = default
 	) {
 		options ??= new AutomationOptions();
-		var ownsHttpClient = options.HttpClient is null;
+		bool ownsHttpClient = options.HttpClient is null;
 		var httpClient = options.HttpClient ?? new SystemNetAuthHttpClient(options.HttpTimeout);
 
 		try {

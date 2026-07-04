@@ -14,7 +14,7 @@ internal static class B2cEnricher {
 		if (b2cSession is null)
 			return (false, null);
 
-		var (tenant, policy, authorityBaseUrl) = B2cDetector.Extract(b2cSession.Request);
+		(string? tenant, string? policy, string? authorityBaseUrl) = B2cDetector.Extract(b2cSession.Request);
 
 		var b2cCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		foreach (var session in flowSessions)
@@ -23,10 +23,10 @@ internal static class B2cEnricher {
 					b2cCookies[cookie.Key] = cookie.Value;
 
 		var authRequestSession = flowSessions.FirstOrDefault(s => s.SessionId == flow.AuthorizationRequestSessionId);
-		var codeChallenge = TryGetQuery(authRequestSession, "code_challenge");
-		var codeChallengeMethod = TryGetQuery(authRequestSession, "code_challenge_method");
-		var responseMode = TryGetQuery(authRequestSession, "response_mode");
-		var responseType = TryGetQuery(authRequestSession, "response_type");
+		string? codeChallenge = TryGetQuery(authRequestSession, "code_challenge");
+		string? codeChallengeMethod = TryGetQuery(authRequestSession, "code_challenge_method");
+		string? responseMode = TryGetQuery(authRequestSession, "response_mode");
+		string? responseType = TryGetQuery(authRequestSession, "response_type");
 
 		var details = new B2cFlowDetails(
 			tenant,
@@ -48,6 +48,6 @@ internal static class B2cEnricher {
 	}
 
 	static string? TryGetQuery(Session? session, string key) {
-		return session is not null && session.Request.QueryParameters.TryGetValue(key, out var value) ? value : null;
+		return session is not null && session.Request.QueryParameters.TryGetValue(key, out string? value) ? value : null;
 	}
 }

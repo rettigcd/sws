@@ -53,9 +53,9 @@ internal static class EndpointClassifier {
 	/// </summary>
 	public static OidcDiscoveryDocument? FindRelevantDiscovery(Session session, IReadOnlyList<Session> priorSessions) {
 		OidcDiscoveryDocument? anyPriorDiscovery = null;
-		var host = TryGetHost(session.Request.Url);
+		string? host = TryGetHost(session.Request.Url);
 
-		for (var i = priorSessions.Count - 1; i >= 0; i--) {
+		for (int i = priorSessions.Count - 1; i >= 0; i--) {
 			var candidate = priorSessions[i];
 			if (!IsOpenIdConfiguration(candidate.Request.Url))
 				continue;

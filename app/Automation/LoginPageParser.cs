@@ -83,8 +83,8 @@ internal static class LoginPageParser {
 			.Select(i => new LoginFormField(i.Name!, i.GetAttribute("value") ?? string.Empty))
 			.ToList();
 
-		var actionUrl = ResolveActionUrl(form.GetAttribute("action"), document.Url ?? pageUrl);
-		var method = (form.GetAttribute("method") ?? "POST").ToUpperInvariant();
+		string actionUrl = ResolveActionUrl(form.GetAttribute("action"), document.Url ?? pageUrl);
+		string method = (form.GetAttribute("method") ?? "POST").ToUpperInvariant();
 
 		var parsed = new ParsedLoginPage(actionUrl, method, hiddenFields, usernameInput?.Name, passwordInput.Name!);
 		return new LoginPageParseResult(LoginPageParseOutcome.LoginForm, parsed);
@@ -113,7 +113,7 @@ internal static class LoginPageParser {
 	}
 
 	static bool MatchesAnyHint(IHtmlInputElement input, string[] hints) {
-		var haystack = $"{input.Name} {input.Id} {input.GetAttribute("autocomplete")}";
+		string haystack = $"{input.Name} {input.Id} {input.GetAttribute("autocomplete")}";
 		return hints.Any(hint => haystack.Contains(hint, StringComparison.OrdinalIgnoreCase));
 	}
 
@@ -134,7 +134,7 @@ internal static class LoginPageParser {
 	}
 
 	static bool ContainsWebAuthnMarkers(IElement script) {
-		var text = script.TextContent ?? string.Empty;
+		string text = script.TextContent ?? string.Empty;
 		return text.Contains("navigator.credentials", StringComparison.OrdinalIgnoreCase)
 			|| text.Contains("webauthn", StringComparison.OrdinalIgnoreCase);
 	}
@@ -143,7 +143,7 @@ internal static class LoginPageParser {
 		if (document.QuerySelector("#app, #root, [data-reactroot]") is not null)
 			return true;
 
-		var bodyText = document.Body?.TextContent?.Trim() ?? string.Empty;
+		string bodyText = document.Body?.TextContent?.Trim() ?? string.Empty;
 		if (bodyText.Contains("enable javascript", StringComparison.OrdinalIgnoreCase))
 			return true;
 

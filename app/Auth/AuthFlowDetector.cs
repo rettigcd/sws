@@ -14,7 +14,7 @@ internal static class AuthFlowDetector {
 		var flows = new List<DetectedAuthenticationFlow>();
 		foreach (var flow in flowsInProgress) {
 			var variables = VariableExtractor.Extract(flow, classifiedSessions);
-			var (isAzureB2c, b2cDetails) = AzureB2c.B2cEnricher.Enrich(flow, classifiedSessions);
+			(bool isAzureB2c, AzureB2c.B2cFlowDetails? b2cDetails) = AzureB2c.B2cEnricher.Enrich(flow, classifiedSessions);
 			var replayRequirements = ReplayRequirementBuilder.Build(flow, variables, isAzureB2c);
 			FlowWarningBuilder.AppendAnalysisWarnings(flow, variables);
 			var authenticationMethod = DetermineAuthenticationMethod(flow, variables, classifiedSessions);
@@ -67,13 +67,13 @@ internal static class AuthFlowDetector {
 	static AuthenticationCredentials? DetermineAuthenticationMethod(FlowInProgress flow, List<Variable> variables, IReadOnlyList<Session> allSessions) {
 		var callbackSession = allSessions.FirstOrDefault(s => s.SessionId == flow.AuthorizationCallbackSessionId);
 		if (callbackSession?.Request.FormBody is { Count: > 0 } formBody) {
-			var username = formBody
+			string? username = formBody
 				.FirstOrDefault(e => e.Key.Equals("username", StringComparison.OrdinalIgnoreCase)
 					|| e.Key.Equals("email", StringComparison.OrdinalIgnoreCase)
 					|| e.Key.Equals("logonIdentifier", StringComparison.OrdinalIgnoreCase))
 				?.Value;
 
-			var password = formBody
+			string? password = formBody
 				.FirstOrDefault(e => e.Key.Equals("password", StringComparison.OrdinalIgnoreCase))
 				?.Value;
 

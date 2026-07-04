@@ -62,8 +62,8 @@ internal static class SessionClassifier {
 		if (EndpointClassifier.IsAuthorizeRequest(session.Request.Url, discovery) || EndpointClassifier.IsTokenRequest(session.Request.Url, discovery))
 			return false;
 
-		var hasCode = session.Request.QueryParameters.ContainsKey("code");
-		var hasState = session.Request.QueryParameters.ContainsKey("state")
+		bool hasCode = session.Request.QueryParameters.ContainsKey("code");
+		bool hasState = session.Request.QueryParameters.ContainsKey("state")
 			|| session.Request.QueryParameters.ContainsKey("session_state");
 
 		if (hasCode && hasState)
@@ -78,13 +78,13 @@ internal static class SessionClassifier {
 			if (!OAuthParameterHelpers.IsOauth2AuthorizationRequest(priorSession.Request))
 				continue;
 
-			if (!OAuthParameterHelpers.TryGetRequestParameter(priorSession.Request, "redirect_uri", out var redirectUri))
+			if (!OAuthParameterHelpers.TryGetRequestParameter(priorSession.Request, "redirect_uri", out string redirectUri))
 				continue;
 
 			if (!OAuthParameterHelpers.UrlsMatchIgnoringFragment(redirectUri, session.Request.Url))
 				continue;
 
-			if (!OAuthParameterHelpers.TryGetRequestParameter(priorSession.Request, "response_mode", out var responseMode)
+			if (!OAuthParameterHelpers.TryGetRequestParameter(priorSession.Request, "response_mode", out string responseMode)
 				|| !responseMode.Equals("fragment", StringComparison.OrdinalIgnoreCase)) {
 				continue;
 			}
@@ -102,7 +102,7 @@ internal static class SessionClassifier {
 		if (!EndpointClassifier.IsTokenRequest(session.Request.Url, discovery))
 			return false;
 
-		if (!OAuthParameterHelpers.TryGetRequestParameter(session.Request, "grant_type", out var actualGrantType))
+		if (!OAuthParameterHelpers.TryGetRequestParameter(session.Request, "grant_type", out string actualGrantType))
 			return false;
 
 		return actualGrantType.Equals(grantType, StringComparison.OrdinalIgnoreCase);
@@ -140,14 +140,14 @@ internal static class SessionClassifier {
 			return RequestType.AuthorizationCallbackRequest;
 
 		if (OAuthParameterHelpers.IsOauth2AuthorizationRequest(session.Request)) {
-			if (!session.Request.QueryParameters.TryGetValue("response_type", out var responseType)
+			if (!session.Request.QueryParameters.TryGetValue("response_type", out string? responseType)
 				|| string.IsNullOrWhiteSpace(responseType))
 				return RequestType.AuthorizationRequest_Unknown;
 
-			var hasCode = OAuthParameterHelpers.HasResponseType(responseType, "code");
-			var hasToken = OAuthParameterHelpers.HasResponseType(responseType, "token");
-			var hasIdToken = OAuthParameterHelpers.HasResponseType(responseType, "id_token");
-			var hasPkce = session.Request.QueryParameters.ContainsKey("code_challenge");
+			bool hasCode = OAuthParameterHelpers.HasResponseType(responseType, "code");
+			bool hasToken = OAuthParameterHelpers.HasResponseType(responseType, "token");
+			bool hasIdToken = OAuthParameterHelpers.HasResponseType(responseType, "id_token");
+			bool hasPkce = session.Request.QueryParameters.ContainsKey("code_challenge");
 
 			if (hasCode && (hasToken || hasIdToken))
 				return RequestType.AuthorizationRequest_Hybrid;
@@ -195,7 +195,7 @@ internal static class SessionClassifier {
 		}
 
 		if (response.StatusCode is >= 300 and < 400) {
-			if (response.Headers.TryGetValue("Location", out var location)
+			if (response.Headers.TryGetValue("Location", out string? location)
 				&& (location.Contains("code=", StringComparison.OrdinalIgnoreCase)
 					|| location.Contains("error=", StringComparison.OrdinalIgnoreCase)
 					|| location.Contains("#code=", StringComparison.OrdinalIgnoreCase)

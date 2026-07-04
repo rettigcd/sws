@@ -11,8 +11,8 @@ internal static class FlowWarningBuilder {
 			flow.AddWarning(FlowWarningKind.UnsafeImplicitFlow, "Implicit/hybrid flow returns tokens directly in the URL fragment, which is less secure than authorization code + PKCE.");
 		}
 
-		var hasChallenge = variables.Any(v => v.Name.Equals("code_challenge", StringComparison.OrdinalIgnoreCase));
-		var hasVerifier = variables.Any(v => v.Name.Equals("code_verifier", StringComparison.OrdinalIgnoreCase));
+		bool hasChallenge = variables.Any(v => v.Name.Equals("code_challenge", StringComparison.OrdinalIgnoreCase));
+		bool hasVerifier = variables.Any(v => v.Name.Equals("code_verifier", StringComparison.OrdinalIgnoreCase));
 		if (hasChallenge && !hasVerifier)
 			flow.AddWarning(FlowWarningKind.PkceMismatch, "code_challenge observed on the authorization request but no matching code_verifier observed on the token request.");
 

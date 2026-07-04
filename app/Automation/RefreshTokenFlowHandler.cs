@@ -18,7 +18,7 @@ internal static class RefreshTokenFlowHandler {
 			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingRequiredEndpoint, "Could not resolve a token endpoint from discovery, B2C details, or captured sessions."));
 		}
 
-		var refreshToken = options.RefreshTokenOverride
+		string? refreshToken = options.RefreshTokenOverride
 			?? flow.Variables.FirstOrDefault(v => v.Name.Equals("refresh_token", StringComparison.OrdinalIgnoreCase))?.Value;
 		if (string.IsNullOrWhiteSpace(refreshToken)) {
 			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingCredentials, "No refresh_token available (not supplied via options and none found on the flow)."));
@@ -32,7 +32,7 @@ internal static class RefreshTokenFlowHandler {
 			Notes: options.RefreshTokenOverride is null ? "Fallback to a refresh_token captured in the original capture; may be stale/rotated/expired." : null
 		));
 
-		var clientId = flow.ClientId
+		string? clientId = flow.ClientId
 			?? flow.Variables.FirstOrDefault(v => v.Name.Equals("client_id", StringComparison.OrdinalIgnoreCase))?.Value;
 		if (string.IsNullOrWhiteSpace(clientId))
 			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingCredentials, "Flow has no client_id."));

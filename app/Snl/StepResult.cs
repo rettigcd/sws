@@ -13,4 +13,6 @@ public enum StepResult {
 	EventBookingSessionCreated,
 	EventThumbnailSelectedAnalyticsSubmitted,
 	EventThumbnailClickedAnalyticsSubmitted,
+	ClickAnalyticsSubmitted,
+	BookingCreated,
 }
