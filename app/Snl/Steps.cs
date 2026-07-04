@@ -62,7 +62,7 @@ internal static class Steps {
 	/// <returns>
 	/// <see cref="StepResult.ScriptRequested"/> once the script resource returns a successful response; the response body is discarded.
 	/// </returns>
-	public static async Task<StepResult> _____RequestGenericAsync(Context ctx, string uri) {
+	public static async Task<StepResult> ____RequestGenericAsync(Context ctx, string uri) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 
 		var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -158,7 +158,7 @@ internal static class Steps {
 	}
 
 	/// <summary>The event this session is booking - the first event returned by GetSeriesEventsAsync.</summary>
-	static EventMetadata GetSelectedEvent(Context ctx) =>
+	public static EventMetadata GetSelectedEvent(Context ctx) =>
 		ctx.Events.Count > 0 ? ctx.Events[0] : throw new InvalidOperationException("Context.Events is not set.");
 
 	/// <returns>
@@ -212,10 +212,11 @@ internal static class Steps {
 	/// The response may be {"status":404,"message":"Session not found"} - this is not part of the booking-critical path.
 	/// </summary>
 	/// <returns>
-	/// <paramref name="successResult"/> once the events endpoint returns a successful response.
+	/// <see cref="StepResult.AnalyticsSubmitted"/> once the events endpoint returns a successful response.
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
-	static async Task<StepResult> PostSessionAnalyticsEventsAsync(Context ctx, string json, StepResult successResult, string endpointLabel) {
+	public static async Task<StepResult> ____PostSessionAnalyticsEventsAsync(Context ctx, params ClickAnalyticsEvent[] events) {
+		string json = JsonSerializer.Serialize(events);
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
 		string bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
@@ -235,30 +236,14 @@ internal static class Steps {
 
 		var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
-			throw new InvalidOperationException($"{endpointLabel} endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+			throw new InvalidOperationException($"Event thumbnail clicked analytics endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		string responseJson = await response.Content.ReadAsStringAsync();
 		using var document = JsonDocument.Parse(responseJson);
 		if (document.RootElement.TryGetProperty("status", out var status) && status.GetInt32() == 404)
 			return StepResult.SessionNotFound;
 
-		return successResult;
-	}
-
-	/// <returns>
-	/// <see cref="StepResult.UiInteractionEventsSubmitted"/> once the events endpoint returns a successful response.
-	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
-	/// </returns>
-	public static Task<StepResult> SubmitUiInteractionEventsAsync(Context ctx) {
-		const string json = """
-			[
-				{"action":"Select Date","properties":{"label":"Event Booking Date: undefined","category":"Event"}},
-				{"action":"Select Topics","properties":{"label":"Event Booking topics: undefined","category":"Event"}},
-				{"action":"Select Store","properties":{"label":"Event Booking Store: undefined","category":"Event"}}
-			]
-			""";
-
-		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.UiInteractionEventsSubmitted, "UI interaction events");
+		return StepResult.AnalyticsSubmitted;
 	}
 
 	/// <returns>
@@ -307,71 +292,9 @@ internal static class Steps {
 	}
 
 	/// <summary>Builds the "Select Item Event Thumbnail" analytics event, labeled with the given event title.</summary>
-	static object BuildItemEventThumbnailSelectedEvent(string eventTitle) => new {
-		action = "Select Item Event Thumbnail",
-		properties = new {
-			label = $"Event Booking: event selected ({eventTitle})",
-			eventType = "click",
-			category = "Event",
-		},
-	};
-
-	/// <returns>
-	/// <see cref="StepResult.EventThumbnailSelectedAnalyticsSubmitted"/> once the events endpoint returns a successful response.
-	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
-	/// </returns>
-	public static Task<StepResult> SubmitEventThumbnailSelectedAnalyticsAsync(Context ctx) {
+	public static ClickAnalyticsEvent BuildItemEventThumbnailSelectedEvent(Context ctx) {
 		string eventTitle = GetSelectedEvent(ctx).Title;
-
-		string json = JsonSerializer.Serialize(new[] { BuildItemEventThumbnailSelectedEvent(eventTitle) });
-
-		return PostSessionAnalyticsEventsAsync(
-			ctx, 
-			json, 
-			StepResult.EventThumbnailSelectedAnalyticsSubmitted, 
-			"Event thumbnail selected analytics"
-		);
-	}
-
-	/// <returns>
-	/// <see cref="StepResult.EventThumbnailClickedAnalyticsSubmitted"/> once the events endpoint returns a successful response.
-	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
-	/// </returns>
-	public static Task<StepResult> SubmitEventThumbnailClickedAnalyticsAsync(Context ctx) {
-		string eventTitle = GetSelectedEvent(ctx).Title;
-
-		string json = JsonSerializer.Serialize(new[] {
-			BuildItemEventThumbnailSelectedEvent(eventTitle),
-			new {
-				action = "Select Event Thumbnail",
-				properties = new {
-					label = "Event Booking: click/select thumbnail event",
-					eventType = "click",
-					category = "Event",
-				},
-			},
-		});
-
-		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.EventThumbnailClickedAnalyticsSubmitted, "Event thumbnail clicked analytics");
-	}
-
-	/// <returns>
-	/// <see cref="StepResult.ClickAnalyticsSubmitted"/> once the events endpoint returns a successful response.
-	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
-	/// </returns>
-	public static Task<StepResult> ______SubmitClickAnalyticsAsync(Context ctx, string action, string label) {
-		string json = JsonSerializer.Serialize(new[] {
-			new {
-				action,
-				properties = new {
-					label,
-					eventType = "click",
-					category = "Event",
-				},
-			},
-		});
-
-		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.ClickAnalyticsSubmitted, "Click analytics");
+		return new("Select Item Event Thumbnail", new ClickAnalyticsEventProperties($"Event Booking: event selected ({eventTitle})", "click", "Event"));
 	}
 
 	/// <returns>

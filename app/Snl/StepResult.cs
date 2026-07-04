@@ -4,15 +4,12 @@ public enum StepResult {
 	None, // default
 	IndexPageRetrieved,
 	ScriptRequested,
-	UiInteractionEventsSubmitted,
+	AnalyticsSubmitted,
 	SessionNotFound,
 	ConfigRetrieved,
 	EventsRetrieved,
 	LanguageOptionsRetrieved,
 	LanguageDictRetrieved,
 	EventBookingSessionCreated,
-	EventThumbnailSelectedAnalyticsSubmitted,
-	EventThumbnailClickedAnalyticsSubmitted,
-	ClickAnalyticsSubmitted,
 	BookingCreated,
 }
