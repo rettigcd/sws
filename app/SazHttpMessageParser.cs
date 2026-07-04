@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 internal static class SazHttpMessageParser {
@@ -19,7 +20,41 @@ internal static class SazHttpMessageParser {
 				headers["Host"] = target;
 		}
 
+		if (headers.TryGetValue("Transfer-Encoding", out var transferEncoding)
+			&& transferEncoding.Contains("chunked", StringComparison.OrdinalIgnoreCase)) {
+			bodyBytes = Dechunk(bodyBytes);
+		}
+
 		return new HttpMessageParts(startLine, headers, bodyBytes);
+	}
+
+	/// <summary>Strips HTTP chunked-transfer-encoding framing (chunk-size lines and trailing CRLFs), leaving raw body bytes.</summary>
+	private static byte[] Dechunk(byte[] body) {
+		var crlf = new byte[] { 13, 10 };
+		using var output = new MemoryStream();
+
+		var pos = 0;
+		while (pos < body.Length) {
+			var lineEnd = IndexOf(body, crlf, startIndex: pos);
+			if (lineEnd < 0)
+				break;
+
+			var sizeLine = Encoding.ASCII.GetString(body, pos, lineEnd - pos).Split(';')[0].Trim();
+			if (!int.TryParse(sizeLine, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var chunkSize))
+				break;
+
+			if (chunkSize == 0)
+				break;
+
+			var chunkStart = lineEnd + crlf.Length;
+			if (chunkStart + chunkSize > body.Length)
+				break;
+
+			output.Write(body, chunkStart, chunkSize);
+			pos = chunkStart + chunkSize + crlf.Length;
+		}
+
+		return output.ToArray();
 	}
 
 	private static (byte[] headerBytes, byte[] bodyBytes) FindHeaderBodySeparator(byte[] rawBytes) {
@@ -46,10 +81,14 @@ internal static class SazHttpMessageParser {
 	}
 
 	private static int IndexOf(byte[] data, byte[] marker) {
+		return IndexOf(data, marker, 0);
+	}
+
+	private static int IndexOf(byte[] data, byte[] marker, int startIndex) {
 		if (marker.Length == 0 || data.Length < marker.Length)
 			return -1;
 
-		for (var i = 0; i <= data.Length - marker.Length; i++) {
+		for (var i = startIndex; i <= data.Length - marker.Length; i++) {
 			var matched = true;
 			for (var j = 0; j < marker.Length; j++) {
 				if (data[i + j] != marker[j]) {
@@ -88,7 +127,9 @@ internal static class SazHttpMessageParser {
 				continue;
 
 			currentHeader = name;
-			headers[name] = value;
+			headers[name] = headers.TryGetValue(name, out var existingValue)
+				? existingValue + "\n" + value
+				: value;
 		}
 
 		return headers;

@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 
@@ -26,8 +27,26 @@ internal static class BodyAnalyzer {
 		if (bodyBytes.Length == 0)
 			return string.Empty;
 
+		var decodedBytes = DecompressIfBrotli(headers, bodyBytes);
 		var encoding = DetectEncoding(headers) ?? Encoding.UTF8;
-		return SafeDecode(bodyBytes, encoding);
+		return SafeDecode(decodedBytes, encoding);
+	}
+
+	static byte[] DecompressIfBrotli(Dictionary<string, string> headers, byte[] bodyBytes) {
+		var contentEncoding = GetHeader(headers, "Content-Encoding");
+		if (!string.Equals(contentEncoding, "br", StringComparison.OrdinalIgnoreCase))
+			return bodyBytes;
+
+		try {
+			using var input = new MemoryStream(bodyBytes);
+			using var brotli = new BrotliStream(input, CompressionMode.Decompress);
+			using var output = new MemoryStream();
+			brotli.CopyTo(output);
+			return output.ToArray();
+		}
+		catch (Exception) {
+			return bodyBytes;
+		}
 	}
 
 	public static string? BuildResponseText(Dictionary<string, string> headers, string bodyText) {
