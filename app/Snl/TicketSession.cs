@@ -33,12 +33,11 @@ public class TicketSession {
 		// snl3 - SessionId: 20
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-membership-message.html");
 		// snl3 - SessionId: 21
-		await Steps.GetSeriesEventsAsync(_context);
+		await Steps.GetSeriesConfigAsync(_context);
 		// snl3 - SessionId: 22
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/eventId/choose?timezone=America%2FNew_York");
 		// snl3 - SessionId: 23
-		// wrong! - this event needs parsed from previous response.
-		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/events/UZJLSRJUNZC");
+		await Steps.GetSeriesEventsAsync(_context);
 		// snl3 - SessionId: 24
 		await Steps.SubmitUiInteractionEventsAsync(_context);
 	}

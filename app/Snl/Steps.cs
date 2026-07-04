@@ -80,6 +80,32 @@ internal static class Steps {
 	/// <returns>
 	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response.
 	/// </returns>
+	public static async Task<StepResult> GetSeriesConfigAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/booking-widget/event/series/{seriesId}";
+		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Series events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		// TODO: parse the response and populate Context once the shape it's needed for is known.
+
+		return StepResult.ConfigRetrieved;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response.
+	/// </returns>
 	public static async Task<StepResult> GetSeriesEventsAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");

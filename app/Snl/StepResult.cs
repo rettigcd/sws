@@ -6,5 +6,6 @@ public enum StepResult {
 	ScriptRequested,
 	UiInteractionEventsSubmitted,
 	SessionNotFound,
+	ConfigRetrieved,
 	EventsRetrieved,
 }
