@@ -29,6 +29,7 @@ internal sealed class SystemNetAuthHttpClient : IAuthHttpClient, IDisposable {
 			UseCookies = true,
 			CookieContainer = Cookies,
 			AllowAutoRedirect = false,
+			AutomaticDecompression = DecompressionMethods.All,
 		};
 		_client = new HttpClient(_handler, disposeHandler: false) {
 			Timeout = timeout ?? TimeSpan.FromSeconds(30),
