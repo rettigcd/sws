@@ -224,4 +224,29 @@ internal static class Steps {
 		return StepResult.UiInteractionEventsSubmitted;
 	}
 
+	/// <returns>
+	/// <see cref="StepResult.Stub"/> - not yet implemented. Registers a booking session scoped to a
+	/// specific event (POST .../event-series/{seriesId}/events/{eventId}/session), carrying device/
+	/// browser fingerprint metadata plus the current Q-BW-SESSION-ID/Q-BW-USER-ID.
+	/// </returns>
+	public static Task<StepResult> CreateEventBookingSessionAsync(Context ctx) {
+		return Task.FromResult(StepResult.Stub);
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.Stub"/> - not yet implemented. Submits the "Select Item Event Thumbnail"
+	/// analytics event marking that the user picked an event from the thumbnail list.
+	/// </returns>
+	public static Task<StepResult> SubmitEventThumbnailSelectedAnalyticsAsync(Context ctx) {
+		return Task.FromResult(StepResult.Stub);
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.Stub"/> - not yet implemented. Submits the "Select Item Event Thumbnail" /
+	/// "Select Event Thumbnail" analytics events marking the user clicking through on that thumbnail.
+	/// </returns>
+	public static Task<StepResult> SubmitEventThumbnailClickedAnalyticsAsync(Context ctx) {
+		return Task.FromResult(StepResult.Stub);
+	}
+
 }

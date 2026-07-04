@@ -64,6 +64,16 @@ public class TicketSession {
 		await Steps.GetSeriesLanguagesAsync(_context);
 		// snl3 - SessionId: 40
 		await Steps.GetSeriesTranslationAsync(_context);
+		// snl3 - SessionId: 41
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/event-details/event-details.html");
+		// snl3 - SessionId: 42
+		await Steps.CreateEventBookingSessionAsync(_context);
+		// snl3 - SessionId: 43
+		await Steps.SubmitEventThumbnailSelectedAnalyticsAsync(_context);
+		// snl3 - SessionId: 44
+		await Steps.SubmitEventThumbnailClickedAnalyticsAsync(_context);
+		// snl3 - SessionId: 45
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/group-size/group-size.html");
 	}
 
 }

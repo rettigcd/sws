@@ -10,4 +10,5 @@ public enum StepResult {
 	EventsRetrieved,
 	LanguageOptionsRetrieved,
 	LanguageDictRetrieved,
+	Stub,
 }
