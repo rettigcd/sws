@@ -6,7 +6,7 @@ internal static class Steps {
 
 	/// <returns>
 	/// <see cref="StepResult.IndexPageRetrieved"/> if the endpoint returned a successful HTML response, populating
-	/// <see cref="Context.JavascriptScripts"/> and <see cref="Context.CurrentPage"/>.
+	/// <see cref="Context.JavascriptScripts"/>, <see cref="Context.CurrentPage"/>, and <see cref="Context.BwSessionId"/>.
 	/// </returns>
 	public static async Task<StepResult> GetIndexPageAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
@@ -46,6 +46,9 @@ internal static class Steps {
 
 		ctx.JavascriptScripts.AddRange(scriptUris);
 		ctx.CurrentPage = requestUri;
+
+		ctx.BwSessionId = http.Cookies.GetCookies(baseUri)["Q-BW-SESSION-ID"]?.Value
+			?? throw new InvalidOperationException("Response did not set the Q-BW-SESSION-ID cookie.");
 
 		return StepResult.IndexPageRetrieved;
 	}

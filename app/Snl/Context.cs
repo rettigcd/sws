@@ -14,4 +14,7 @@ internal class Context {
 	// URL of the most recently requested page, used to supply the Referrer header on later requests.
 	public string? CurrentPage { get; set; }
 
+	// Value of the "Q-BW-SESSION-ID" cookie set by GetIndexPageAsync.
+	public string? BwSessionId { get; set; }
+
 }
