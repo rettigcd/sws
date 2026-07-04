@@ -13,73 +13,73 @@ public class TicketSession {
 	public async Task GetTicketsAsync() {
 		_context.SeriesId = "UZJLSRJUNZC";
 
-		// snl3 - SessionId: 2
+		// snl3(2), snl1(1)
 		await Steps.GetIndexPageAsync(_context);
 
-		// snl3 - SessionId: 12, 13
+		// snl3(12, 13)
 		foreach (var scriptUri in _context.JavascriptScripts)
 			await Steps.RequestGenericAsync(_context, scriptUri);
 
 		_context.JavascriptScripts.Clear();
 
-		// snl3 - SessionId: 15
+		// snl3(15)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/view/bookingEventWidget.html");
-		// snl3 - SessionId: 17
+		// snl3(17)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/footer/q-footer.html");
-		// snl3 - SessionId: 18
+		// snl3(18)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-appointment-slot-expired.html");
-		// snl3 - SessionId: 19
+		// snl3(19)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-event-has-passed.html");
-		// snl3 - SessionId: 20
+		// snl3(20)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-membership-message.html");
-		// snl3 - SessionId: 21
+		// snl3(21), snl1(2)
 		await Steps.GetSeriesConfigAsync(_context);
-		// snl3 - SessionId: 22
+		// snl3(22), snl1(5) (500 Internal Server Error in both snl1 and snl2)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/eventId/choose?timezone=America%2FNew_York");
 
-		// snl3 - SessionId: 23
+		// snl3(23), snl1(7)
 		await Steps.GetSeriesEventsAsync(_context);
 
-		// snl3 - SessionId: 24
+		// snl3(24), snl1(8)
 		await Steps.SubmitUiInteractionEventsAsync(_context);
 
-		// snl3 - SessionId: 26
+		// snl3(26)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/choose-event.html");
-		// snl3 - SessionId: 27
+		// snl3(27)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/select-language/select-language.html");
-		// snl3 - SessionId: 28
+		// snl3(28)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/cookie-policy/cookie-policy.html");
-		// snl3 - SessionId: 29
+		// snl3(29)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/privacy-policy/privacy-policy.html");
-		// snl3 - SessionId: 30
+		// snl3(30)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/terms-conditions/terms-conditions.html");
-		// snl3 - SessionId: 32
+		// snl3(32)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/datepicker/datepicker.html");
-		// snl3 - SessionId: 33
+		// snl3(33)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/social-share-buttons/social-share-buttons.html");
-		// snl3 - SessionId: 34
+		// snl3(34)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/filter-topics/filter-topics.html");
-		// snl3 - SessionId: 35
+		// snl3(35)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/other-stores/stores.html");
-		// snl3 - SessionId: 36
+		// snl3(36)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/event-thumbnail.html");
 
-		// snl3 - SessionId: 37
+		// snl3(37), snl1(9)
 		await Steps.GetSeriesLanguagesAsync(_context);
-		// snl3 - SessionId: 40
+		// snl3(40)
 		await Steps.GetSeriesTranslationAsync(_context);
 
-		// snl3 - SessionId: 41
+		// snl3(41), snl1(11)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/event-details/event-details.html");
-		// snl3 - SessionId: 42
+		// snl3(42), snl1(12)
 		await Steps.CreateEventBookingSessionAsync(_context);
 
-		// snl3 - SessionId: 43
+		// snl3(43), snl1(13)
 		await Steps.SubmitEventThumbnailSelectedAnalyticsAsync(_context);
-		// snl3 - SessionId: 44
+		// snl3(44), snl1(14)
 		await Steps.SubmitEventThumbnailClickedAnalyticsAsync(_context);
 
-		// snl3 - SessionId: 45
+		// snl3(45), snl1(15)
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/group-size/group-size.html");
 	}
 
