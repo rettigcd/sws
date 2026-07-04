@@ -44,3 +44,9 @@ instructions are given; one-off feature requests (e.g. "add a step that does X")
     itself be `public`, not `internal`.
   - `Automation.IAuthHttpClient` is `public` (not `internal`, unlike the rest of `Automation`) specifically
     so `AuthSession`'s public constructor can take it as a parameter.
+  - Minimal required inputs to run `AuthenticateAsync()`: the constructor's `IAuthHttpClient`, the four
+    `InitAuthorizationRequest` values (`wellKnownEndpoint`, `clientId`, `redirectUri`, `scope`), and either
+    `InitAuthorization(username, password)` or a pre-seeded SSO session via `InitAuthServerCookies(cookies)`
+    (which lets `SendAuthorizationRequestAsync` redirect straight through without a login page). Everything
+    else on `Context` (`State`, `CodeVerifier`, `CodeChallenge`, `Code`, `LoginPageHtml`/`LoginPageUrl`,
+    `WellKnown`, `Tokens`) is generated or populated internally by `Steps`, not caller-supplied.
