@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AngleSharp;
 
 namespace Snl;
@@ -10,8 +11,9 @@ internal static class Steps {
 	/// </returns>
 	public static async Task<StepResult> GetIndexPageAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
 
-		var requestUri = "https://bookings-us.qudini.com/booking-widget/events/UZJLSRJUNZC/event/choose";
+		var requestUri = $"https://bookings-us.qudini.com/booking-widget/events/{seriesId}/event/choose";
 		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
 		request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
 		request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
@@ -73,6 +75,75 @@ internal static class Steps {
 			throw new InvalidOperationException($"Script endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		return StepResult.ScriptRequested;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> GetSeriesEventsAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/booking-widget/event/series/{seriesId}";
+		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Series events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		// TODO: parse the response and populate Context once the shape it's needed for is known.
+
+		return StepResult.EventsRetrieved;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.UiInteractionEventsSubmitted"/> once the events endpoint returns a successful response.
+	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
+	/// </returns>
+	public static async Task<StepResult> SubmitUiInteractionEventsAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/event-series/UZJLSRJUNZC/session/{bwSessionId}/events";
+		const string json = """
+			[
+				{"action":"Select Date","properties":{"label":"Event Booking Date: undefined","category":"Event"}},
+				{"action":"Select Topics","properties":{"label":"Event Booking topics: undefined","category":"Event"}},
+				{"action":"Select Store","properties":{"label":"Event Booking Store: undefined","category":"Event"}}
+			]
+			""";
+
+		var request = new HttpRequestMessage(HttpMethod.Post, requestUri) {
+			Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+		};
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Origin", "https://bookings-us.qudini.com");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"UI interaction events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		// The response is JSON and may be {"status":404,"message":"Session not found"} for the first
+		// response - this is a fire-and-forget analytics call, not part of the booking-critical path.
+		var responseJson = await response.Content.ReadAsStringAsync();
+		using var document = JsonDocument.Parse(responseJson);
+		if (document.RootElement.TryGetProperty("status", out var status) && status.GetInt32() == 404)
+			return StepResult.SessionNotFound;
+
+		return StepResult.UiInteractionEventsSubmitted;
 	}
 
 }
