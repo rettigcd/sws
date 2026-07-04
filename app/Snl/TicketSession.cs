@@ -14,11 +14,18 @@ public class TicketSession {
 		await Steps.GetIndexPageAsync(_context);
 
 		foreach (var scriptUri in _context.JavascriptScripts)
-			await Steps.RequestGenericScriptAsync(_context, scriptUri);
+			await Steps.RequestGenericAsync(_context, scriptUri);
 
 		_context.JavascriptScripts.Clear();
 
-		await Steps.RequestGenericScriptAsync(_context, "https://bookings-us.qudini.com/view/bookingEventWidget.html");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/view/bookingEventWidget.html");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/footer/q-footer.html");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-appointment-slot-expired.html");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-event-has-passed.html");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/popup/popup-membership-message.html");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/series/UZJLSRJUNZC");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/eventId/choose?timezone=America%2FNew_York");
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/events/UZJLSRJUNZC");
 	}
 
 }

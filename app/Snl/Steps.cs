@@ -53,7 +53,7 @@ internal static class Steps {
 	/// <returns>
 	/// <see cref="StepResult.ScriptRequested"/> once the script resource returns a successful response; the response body is discarded.
 	/// </returns>
-	public static async Task<StepResult> RequestGenericScriptAsync(Context ctx, string uri) {
+	public static async Task<StepResult> RequestGenericAsync(Context ctx, string uri) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 
 		var request = new HttpRequestMessage(HttpMethod.Get, uri);
