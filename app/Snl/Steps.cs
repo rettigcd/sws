@@ -7,7 +7,8 @@ internal static class Steps {
 
 	/// <returns>
 	/// <see cref="StepResult.IndexPageRetrieved"/> if the endpoint returned a successful HTML response, populating
-	/// <see cref="Context.JavascriptScripts"/>, <see cref="Context.CurrentPage"/>, and <see cref="Context.BwSessionId"/>.
+	/// <see cref="Context.JavascriptScripts"/>, <see cref="Context.CurrentPage"/>, <see cref="Context.BwSessionId"/>,
+	/// and <see cref="Context.BwUserId"/>.
 	/// </returns>
 	public static async Task<StepResult> GetIndexPageAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
@@ -51,6 +52,9 @@ internal static class Steps {
 
 		ctx.BwSessionId = http.Cookies.GetCookies(baseUri)["Q-BW-SESSION-ID"]?.Value
 			?? throw new InvalidOperationException("Response did not set the Q-BW-SESSION-ID cookie.");
+
+		ctx.BwUserId = http.Cookies.GetCookies(baseUri)["Q-BW-USER-ID"]?.Value
+			?? throw new InvalidOperationException("Response did not set the Q-BW-USER-ID cookie.");
 
 		return StepResult.IndexPageRetrieved;
 	}
@@ -104,13 +108,14 @@ internal static class Steps {
 	}
 
 	/// <returns>
-	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response.
+	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response,
+	/// populating <see cref="Context.EventId"/> and <see cref="Context.EventTitle"/> from the first event returned.
 	/// </returns>
 	public static async Task<StepResult> GetSeriesEventsAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
 
-		var requestUri = $"https://bookings-us.qudini.com/booking-widget/event/series/{seriesId}";
+		var requestUri = $"https://bookings-us.qudini.com/booking-widget/event/events/{seriesId}";
 		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
 		if (ctx.CurrentPage is not null)
 			request.Headers.Referrer = new Uri(ctx.CurrentPage);
@@ -120,11 +125,21 @@ internal static class Steps {
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
 
-		using var response = await http.SendAsync(request);
+		var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
 			throw new InvalidOperationException($"Series events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
-		// TODO: parse the response and populate Context once the shape it's needed for is known.
+		var responseJson = await response.Content.ReadAsStringAsync();
+		using var document = JsonDocument.Parse(responseJson);
+		var events = document.RootElement;
+		if (events.ValueKind != JsonValueKind.Array || events.GetArrayLength() == 0)
+			throw new InvalidOperationException("Series events endpoint did not return any events.");
+
+		var firstEvent = events[0];
+		ctx.EventId = firstEvent.GetProperty("identifier").GetString()
+			?? throw new InvalidOperationException("Series events endpoint event did not have an identifier.");
+		ctx.EventTitle = firstEvent.GetProperty("title").GetString()
+			?? throw new InvalidOperationException("Series events endpoint event did not have a title.");
 
 		return StepResult.EventsRetrieved;
 	}
@@ -181,15 +196,49 @@ internal static class Steps {
 		return StepResult.LanguageDictRetrieved;
 	}
 
+	/// <summary>
+	/// Shared plumbing for the fire-and-forget analytics endpoint (POST .../event-series/{seriesId}/session/{bwSessionId}/events).
+	/// The response may be {"status":404,"message":"Session not found"} - this is not part of the booking-critical path.
+	/// </summary>
+	/// <returns>
+	/// <paramref name="successResult"/> once the events endpoint returns a successful response.
+	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
+	/// </returns>
+	static async Task<StepResult> PostSessionAnalyticsEventsAsync(Context ctx, string json, StepResult successResult, string endpointLabel) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+		var bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/event-series/{seriesId}/session/{bwSessionId}/events";
+		var request = new HttpRequestMessage(HttpMethod.Post, requestUri) {
+			Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+		};
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Origin", "https://bookings-us.qudini.com");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"{endpointLabel} endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		var responseJson = await response.Content.ReadAsStringAsync();
+		using var document = JsonDocument.Parse(responseJson);
+		if (document.RootElement.TryGetProperty("status", out var status) && status.GetInt32() == 404)
+			return StepResult.SessionNotFound;
+
+		return successResult;
+	}
+
 	/// <returns>
 	/// <see cref="StepResult.UiInteractionEventsSubmitted"/> once the events endpoint returns a successful response.
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
-	public static async Task<StepResult> SubmitUiInteractionEventsAsync(Context ctx) {
-		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
-		var bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
-
-		var requestUri = $"https://bookings-us.qudini.com/event-series/UZJLSRJUNZC/session/{bwSessionId}/events";
+	public static Task<StepResult> SubmitUiInteractionEventsAsync(Context ctx) {
 		const string json = """
 			[
 				{"action":"Select Date","properties":{"label":"Event Booking Date: undefined","category":"Event"}},
@@ -197,6 +246,35 @@ internal static class Steps {
 				{"action":"Select Store","properties":{"label":"Event Booking Store: undefined","category":"Event"}}
 			]
 			""";
+
+		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.UiInteractionEventsSubmitted, "UI interaction events");
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.EventBookingSessionCreated"/> once the event session endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> CreateEventBookingSessionAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+		var eventId = ctx.EventId ?? throw new InvalidOperationException("Context.EventId is not set.");
+		var bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
+		var bwUserId = ctx.BwUserId ?? throw new InvalidOperationException("Context.BwUserId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/event-series/{seriesId}/events/{eventId}/session";
+		var json = JsonSerializer.Serialize(new {
+			path = (string?)null,
+			action = (string?)null,
+			properties = Array.Empty<object>(),
+			sessionID = bwSessionId,
+			device = "unknown",
+			os = "windows",
+			osVersion = "windows-10",
+			browser = "chrome",
+			browserVersion = "149.0.0.0",
+			referrer = "",
+			kioskIdentifier = (string?)null,
+			userID = bwUserId,
+		});
 
 		var request = new HttpRequestMessage(HttpMethod.Post, requestUri) {
 			Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
@@ -212,41 +290,59 @@ internal static class Steps {
 
 		var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
-			throw new InvalidOperationException($"UI interaction events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+			throw new InvalidOperationException($"Event booking session endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
-		// The response is JSON and may be {"status":404,"message":"Session not found"} for the first
-		// response - this is a fire-and-forget analytics call, not part of the booking-critical path.
-		var responseJson = await response.Content.ReadAsStringAsync();
-		using var document = JsonDocument.Parse(responseJson);
-		if (document.RootElement.TryGetProperty("status", out var status) && status.GetInt32() == 404)
-			return StepResult.SessionNotFound;
-
-		return StepResult.UiInteractionEventsSubmitted;
+		return StepResult.EventBookingSessionCreated;
 	}
 
 	/// <returns>
-	/// <see cref="StepResult.Stub"/> - not yet implemented. Registers a booking session scoped to a
-	/// specific event (POST .../event-series/{seriesId}/events/{eventId}/session), carrying device/
-	/// browser fingerprint metadata plus the current Q-BW-SESSION-ID/Q-BW-USER-ID.
-	/// </returns>
-	public static Task<StepResult> CreateEventBookingSessionAsync(Context ctx) {
-		return Task.FromResult(StepResult.Stub);
-	}
-
-	/// <returns>
-	/// <see cref="StepResult.Stub"/> - not yet implemented. Submits the "Select Item Event Thumbnail"
-	/// analytics event marking that the user picked an event from the thumbnail list.
+	/// <see cref="StepResult.EventThumbnailSelectedAnalyticsSubmitted"/> once the events endpoint returns a successful response.
+	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
 	public static Task<StepResult> SubmitEventThumbnailSelectedAnalyticsAsync(Context ctx) {
-		return Task.FromResult(StepResult.Stub);
+		var eventTitle = ctx.EventTitle ?? throw new InvalidOperationException("Context.EventTitle is not set.");
+
+		var json = JsonSerializer.Serialize(new[] {
+			new {
+				action = "Select Item Event Thumbnail",
+				properties = new {
+					label = $"Event Booking: event selected ({eventTitle})",
+					eventType = "click",
+					category = "Event",
+				},
+			},
+		});
+
+		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.EventThumbnailSelectedAnalyticsSubmitted, "Event thumbnail selected analytics");
 	}
 
 	/// <returns>
-	/// <see cref="StepResult.Stub"/> - not yet implemented. Submits the "Select Item Event Thumbnail" /
-	/// "Select Event Thumbnail" analytics events marking the user clicking through on that thumbnail.
+	/// <see cref="StepResult.EventThumbnailClickedAnalyticsSubmitted"/> once the events endpoint returns a successful response.
+	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
 	public static Task<StepResult> SubmitEventThumbnailClickedAnalyticsAsync(Context ctx) {
-		return Task.FromResult(StepResult.Stub);
+		var eventTitle = ctx.EventTitle ?? throw new InvalidOperationException("Context.EventTitle is not set.");
+
+		var json = JsonSerializer.Serialize(new[] {
+			new {
+				action = "Select Item Event Thumbnail",
+				properties = new {
+					label = $"Event Booking: event selected ({eventTitle})",
+					eventType = "click",
+					category = "Event",
+				},
+			},
+			new {
+				action = "Select Event Thumbnail",
+				properties = new {
+					label = "Event Booking: click/select thumbnail event",
+					eventType = "click",
+					category = "Event",
+				},
+			},
+		});
+
+		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.EventThumbnailClickedAnalyticsSubmitted, "Event thumbnail clicked analytics");
 	}
 
 }

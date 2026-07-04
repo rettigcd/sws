@@ -10,5 +10,8 @@ public enum StepResult {
 	EventsRetrieved,
 	LanguageOptionsRetrieved,
 	LanguageDictRetrieved,
+	EventBookingSessionCreated,
+	EventThumbnailSelectedAnalyticsSubmitted,
+	EventThumbnailClickedAnalyticsSubmitted,
 	Stub,
 }

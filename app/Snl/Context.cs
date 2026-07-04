@@ -10,6 +10,13 @@ internal class Context {
 	// Event-series identifier, e.g. "UZJLSRJUNZC". Set after instantiation, before GetIndexPageAsync is called.
 	public string? SeriesId { get; set; }
 
+	// Event identifier, e.g. "AQTAPFO2R6C", of the first event in the series. Populated by GetSeriesEventsAsync.
+	public string? EventId { get; set; }
+
+	// Event title, e.g. "Coffee Slushies", of the first event in the series. Used in analytics event labels.
+	// Populated by GetSeriesEventsAsync.
+	public string? EventTitle { get; set; }
+
 	// Absolute src URLs of <script> tags found on the index page, populated by GetIndexPageAsync.
 	// Populated via AddRange, not by replacing the list itself.
 	public List<string> JavascriptScripts { get; } = [];
@@ -19,5 +26,8 @@ internal class Context {
 
 	// Value of the "Q-BW-SESSION-ID" cookie set by GetIndexPageAsync.
 	public string? BwSessionId { get; set; }
+
+	// Value of the "Q-BW-USER-ID" cookie set by GetIndexPageAsync.
+	public string? BwUserId { get; set; }
 
 }
