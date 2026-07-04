@@ -27,26 +27,36 @@ internal static class BodyAnalyzer {
 		if (bodyBytes.Length == 0)
 			return string.Empty;
 
-		var decodedBytes = DecompressIfBrotli(headers, bodyBytes);
+		var decodedBytes = DecompressIfNeeded(headers, bodyBytes);
 		var encoding = DetectEncoding(headers) ?? Encoding.UTF8;
 		return SafeDecode(decodedBytes, encoding);
 	}
 
-	static byte[] DecompressIfBrotli(Dictionary<string, string> headers, byte[] bodyBytes) {
+	static byte[] DecompressIfNeeded(Dictionary<string, string> headers, byte[] bodyBytes) {
 		var contentEncoding = GetHeader(headers, "Content-Encoding");
-		if (!string.Equals(contentEncoding, "br", StringComparison.OrdinalIgnoreCase))
-			return bodyBytes;
 
 		try {
-			using var input = new MemoryStream(bodyBytes);
-			using var brotli = new BrotliStream(input, CompressionMode.Decompress);
-			using var output = new MemoryStream();
-			brotli.CopyTo(output);
-			return output.ToArray();
+			if (string.Equals(contentEncoding, "br", StringComparison.OrdinalIgnoreCase)) {
+				using var input = new MemoryStream(bodyBytes);
+				using var brotli = new BrotliStream(input, CompressionMode.Decompress);
+				using var output = new MemoryStream();
+				brotli.CopyTo(output);
+				return output.ToArray();
+			}
+
+			if (string.Equals(contentEncoding, "gzip", StringComparison.OrdinalIgnoreCase)) {
+				using var input = new MemoryStream(bodyBytes);
+				using var gzip = new GZipStream(input, CompressionMode.Decompress);
+				using var output = new MemoryStream();
+				gzip.CopyTo(output);
+				return output.ToArray();
+			}
 		}
 		catch (Exception) {
 			return bodyBytes;
 		}
+
+		return bodyBytes;
 	}
 
 	public static string? BuildResponseText(Dictionary<string, string> headers, string bodyText) {
