@@ -60,6 +60,10 @@ public class TicketSession {
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/other-stores/stores.html");
 		// snl3 - SessionId: 36
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/event-thumbnail.html");
+		// snl3 - SessionId: 37
+		await Steps.GetSeriesLanguagesAsync(_context);
+		// snl3 - SessionId: 40
+		await Steps.GetSeriesTranslationAsync(_context);
 	}
 
 }

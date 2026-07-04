@@ -130,6 +130,58 @@ internal static class Steps {
 	}
 
 	/// <returns>
+	/// <see cref="StepResult.LanguageOptionsRetrieved"/> once the series languages endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> GetSeriesLanguagesAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/series-languages/{seriesId}";
+		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Series languages endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		// TODO: parse the response and populate Context once the shape it's needed for is known.
+
+		return StepResult.LanguageOptionsRetrieved;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.LanguageDictRetrieved"/> once the series translation endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> GetSeriesTranslationAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+
+		var requestUri = $"https://bookings-us.qudini.com/series-translation/en/{seriesId}";
+		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Series translation endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		// TODO: parse the response and populate Context once the shape it's needed for is known.
+
+		return StepResult.LanguageDictRetrieved;
+	}
+
+	/// <returns>
 	/// <see cref="StepResult.UiInteractionEventsSubmitted"/> once the events endpoint returns a successful response.
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
