@@ -90,7 +90,7 @@ internal static class Steps {
 	}
 
 	/// <returns>
-	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response.
+	/// <see cref="StepResult.ConfigRetrieved"/> once the series config endpoint returns a successful response.
 	/// </returns>
 	public static async Task<StepResult> GetSeriesConfigAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
@@ -105,7 +105,7 @@ internal static class Steps {
 
 		using var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
-			throw new InvalidOperationException($"Series events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+			throw new InvalidOperationException($"Series config endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		// TODO: parse the response and populate Context once the shape it's needed for is known.
 
@@ -114,7 +114,7 @@ internal static class Steps {
 
 	/// <returns>
 	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response,
-	/// populating <see cref="Context.EventId"/> and <see cref="Context.EventTitle"/> from the first event returned.
+	/// populating <see cref="Context.Events"/> with metadata for each event returned.
 	/// </returns>
 	public static async Task<StepResult> GetSeriesEventsAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
@@ -137,14 +137,28 @@ internal static class Steps {
 		if (events.ValueKind != JsonValueKind.Array || events.GetArrayLength() == 0)
 			throw new InvalidOperationException("Series events endpoint did not return any events.");
 
-		var firstEvent = events[0];
-		ctx.EventId = firstEvent.GetProperty("identifier").GetString()
-			?? throw new InvalidOperationException("Series events endpoint event did not have an identifier.");
-		ctx.EventTitle = firstEvent.GetProperty("title").GetString()
-			?? throw new InvalidOperationException("Series events endpoint event did not have a title.");
+		ctx.Events.AddRange(events.EnumerateArray().Select(ParseEventMetadata));
 
 		return StepResult.EventsRetrieved;
 	}
+
+	static EventMetadata ParseEventMetadata(JsonElement e) {
+		var shop = e.GetProperty("shop");
+		return new EventMetadata(
+			Identifier: e.GetProperty("identifier").GetString() ?? throw new InvalidOperationException("Event did not have an identifier."),
+			Title: e.GetProperty("title").GetString() ?? throw new InvalidOperationException("Event did not have a title."),
+			StartIso: e.GetProperty("startISO").GetString() ?? throw new InvalidOperationException("Event did not have a startISO."),
+			SlotsAvailable: e.GetProperty("slotsAvailable").GetInt32(),
+			MaxGroupSize: e.GetProperty("maxGroupSize").GetInt32(),
+			HasPassed: e.GetProperty("hasPassed").GetBoolean(),
+			StoreName: shop.GetProperty("storeName").GetString() ?? throw new InvalidOperationException("Event's shop did not have a storeName."),
+			StoreIdentifier: shop.GetProperty("storeIdentifier").GetString() ?? throw new InvalidOperationException("Event's shop did not have a storeIdentifier.")
+		);
+	}
+
+	/// <summary>The event this session is booking - the first event returned by GetSeriesEventsAsync.</summary>
+	static EventMetadata GetSelectedEvent(Context ctx) =>
+		ctx.Events.Count > 0 ? ctx.Events[0] : throw new InvalidOperationException("Context.Events is not set.");
 
 	/// <returns>
 	/// <see cref="StepResult.LanguageOptionsRetrieved"/> once the series languages endpoint returns a successful response.
@@ -252,7 +266,7 @@ internal static class Steps {
 	public static async Task<StepResult> CreateEventBookingSessionAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		var seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
-		var eventId = ctx.EventId ?? throw new InvalidOperationException("Context.EventId is not set.");
+		var eventId = GetSelectedEvent(ctx).Identifier;
 		var bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
 		var bwUserId = ctx.BwUserId ?? throw new InvalidOperationException("Context.BwUserId is not set.");
 
@@ -306,7 +320,7 @@ internal static class Steps {
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
 	public static Task<StepResult> SubmitEventThumbnailSelectedAnalyticsAsync(Context ctx) {
-		var eventTitle = ctx.EventTitle ?? throw new InvalidOperationException("Context.EventTitle is not set.");
+		var eventTitle = GetSelectedEvent(ctx).Title;
 
 		var json = JsonSerializer.Serialize(new[] { BuildItemEventThumbnailSelectedEvent(eventTitle) });
 
@@ -318,7 +332,7 @@ internal static class Steps {
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
 	public static Task<StepResult> SubmitEventThumbnailClickedAnalyticsAsync(Context ctx) {
-		var eventTitle = ctx.EventTitle ?? throw new InvalidOperationException("Context.EventTitle is not set.");
+		var eventTitle = GetSelectedEvent(ctx).Title;
 
 		var json = JsonSerializer.Serialize(new[] {
 			BuildItemEventThumbnailSelectedEvent(eventTitle),
