@@ -81,6 +81,14 @@ internal static class Steps {
 		return StepResult.ScriptRequested;
 	}
 
+	/// <summary>Sets the standard headers used by the JSON GET endpoints (Accept, Sec-Fetch-*).</summary>
+	static void AddJsonGetHeaders(HttpRequestMessage request) {
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+	}
+
 	/// <returns>
 	/// <see cref="StepResult.EventsRetrieved"/> once the series events endpoint returns a successful response.
 	/// </returns>
@@ -93,10 +101,7 @@ internal static class Steps {
 		if (ctx.CurrentPage is not null)
 			request.Headers.Referrer = new Uri(ctx.CurrentPage);
 
-		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+		AddJsonGetHeaders(request);
 
 		using var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
@@ -120,10 +125,7 @@ internal static class Steps {
 		if (ctx.CurrentPage is not null)
 			request.Headers.Referrer = new Uri(ctx.CurrentPage);
 
-		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+		AddJsonGetHeaders(request);
 
 		var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
@@ -156,10 +158,7 @@ internal static class Steps {
 		if (ctx.CurrentPage is not null)
 			request.Headers.Referrer = new Uri(ctx.CurrentPage);
 
-		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+		AddJsonGetHeaders(request);
 
 		using var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
@@ -182,10 +181,7 @@ internal static class Steps {
 		if (ctx.CurrentPage is not null)
 			request.Headers.Referrer = new Uri(ctx.CurrentPage);
 
-		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
-		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+		AddJsonGetHeaders(request);
 
 		using var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
@@ -295,6 +291,16 @@ internal static class Steps {
 		return StepResult.EventBookingSessionCreated;
 	}
 
+	/// <summary>Builds the "Select Item Event Thumbnail" analytics event, labeled with the given event title.</summary>
+	static object BuildItemEventThumbnailSelectedEvent(string eventTitle) => new {
+		action = "Select Item Event Thumbnail",
+		properties = new {
+			label = $"Event Booking: event selected ({eventTitle})",
+			eventType = "click",
+			category = "Event",
+		},
+	};
+
 	/// <returns>
 	/// <see cref="StepResult.EventThumbnailSelectedAnalyticsSubmitted"/> once the events endpoint returns a successful response.
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
@@ -302,16 +308,7 @@ internal static class Steps {
 	public static Task<StepResult> SubmitEventThumbnailSelectedAnalyticsAsync(Context ctx) {
 		var eventTitle = ctx.EventTitle ?? throw new InvalidOperationException("Context.EventTitle is not set.");
 
-		var json = JsonSerializer.Serialize(new[] {
-			new {
-				action = "Select Item Event Thumbnail",
-				properties = new {
-					label = $"Event Booking: event selected ({eventTitle})",
-					eventType = "click",
-					category = "Event",
-				},
-			},
-		});
+		var json = JsonSerializer.Serialize(new[] { BuildItemEventThumbnailSelectedEvent(eventTitle) });
 
 		return PostSessionAnalyticsEventsAsync(ctx, json, StepResult.EventThumbnailSelectedAnalyticsSubmitted, "Event thumbnail selected analytics");
 	}
@@ -324,14 +321,7 @@ internal static class Steps {
 		var eventTitle = ctx.EventTitle ?? throw new InvalidOperationException("Context.EventTitle is not set.");
 
 		var json = JsonSerializer.Serialize(new[] {
-			new {
-				action = "Select Item Event Thumbnail",
-				properties = new {
-					label = $"Event Booking: event selected ({eventTitle})",
-					eventType = "click",
-					category = "Event",
-				},
-			},
+			BuildItemEventThumbnailSelectedEvent(eventTitle),
 			new {
 				action = "Select Event Thumbnail",
 				properties = new {

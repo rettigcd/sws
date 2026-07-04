@@ -36,10 +36,13 @@ public class TicketSession {
 		await Steps.GetSeriesConfigAsync(_context);
 		// snl3 - SessionId: 22
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/booking-widget/event/eventId/choose?timezone=America%2FNew_York");
+
 		// snl3 - SessionId: 23
 		await Steps.GetSeriesEventsAsync(_context);
+
 		// snl3 - SessionId: 24
 		await Steps.SubmitUiInteractionEventsAsync(_context);
+
 		// snl3 - SessionId: 26
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/choose-event.html");
 		// snl3 - SessionId: 27
@@ -60,18 +63,22 @@ public class TicketSession {
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/other-stores/stores.html");
 		// snl3 - SessionId: 36
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/event-thumbnail.html");
+
 		// snl3 - SessionId: 37
 		await Steps.GetSeriesLanguagesAsync(_context);
 		// snl3 - SessionId: 40
 		await Steps.GetSeriesTranslationAsync(_context);
+
 		// snl3 - SessionId: 41
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/event-details/event-details.html");
 		// snl3 - SessionId: 42
 		await Steps.CreateEventBookingSessionAsync(_context);
+
 		// snl3 - SessionId: 43
 		await Steps.SubmitEventThumbnailSelectedAnalyticsAsync(_context);
 		// snl3 - SessionId: 44
 		await Steps.SubmitEventThumbnailClickedAnalyticsAsync(_context);
+
 		// snl3 - SessionId: 45
 		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/group-size/group-size.html");
 	}
