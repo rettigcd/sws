@@ -41,7 +41,7 @@ app/AzureB2c/                    (B2C enrichment only, from here on)
   # DELETE: AzureB2cAuthenticationScanner.cs, AuthenticationReport.cs, RequestType.cs, ResponseType.cs
 ```
 
-`app/models/log/Request.cs` / `Response.cs` retype their classification fields from `AzureB2c.RequestType`/`AzureB2c.ResponseType` to `Auth.RequestType`/`Auth.ResponseType` (same enum member names, same `JsonIgnore(WhenWritingDefault)` behavior — `.plan.json` shape unaffected). `app/models/RequestSources.cs` same retype.
+`app/models/log/Request.cs` / `Response.cs` retype their classification fields from `AzureB2c.RequestType`/`AzureB2c.ResponseType` to `Auth.RequestType`/`Auth.ResponseType` (same enum member names, same `JsonIgnore(WhenWritingDefault)` behavior — `.sessions.json` shape unaffected). `app/models/RequestSources.cs` same retype.
 
 ## Key Type Designs
 
@@ -152,7 +152,7 @@ Sessions arrive already ordered by `SessionId` ascending (`SazPlanBuilder.Build`
 
 ## Model & Call-Site Changes
 
-- `Request.RequestType` / `Response.ResponseClassification` **stay** as before-the-fact per-session fields (just retyped to `Auth.*`) — they're persisted directly to `.plan.json` and consumed independently by `.sources.json`, which doesn't need cross-session flow grouping. The new `DetectedAuthenticationFlow` grouping is purely additive and only feeds `.b2c.json`.
+- `Request.RequestType` / `Response.ResponseClassification` **stay** as before-the-fact per-session fields (just retyped to `Auth.*`) — they're persisted directly to `.sessions.json` and consumed independently by `.sources.json`, which doesn't need cross-session flow grouping. The new `DetectedAuthenticationFlow` grouping is purely additive and only feeds `.b2c.json`.
 - `app/Program.cs`: `AzureB2c.AzureB2cAuthenticationScanner.ClassifyUnknownSessions` → `Auth.SessionClassifier.ClassifyUnknownSessions` (same shape). `WriteAzureB2cReportAsJson` body now serializes `Auth.AuthFlowDetectionResult` from `Auth.AuthFlowDetector.Detect(classifiedSessions)` instead of the old `AzureB2c.AuthenticationReport`; file path/extension (`.b2c.json`) unchanged.
 - `app/SazPlanBuilder.cs` (`WriteAllSessionSourcesReport`): swap to `Auth.SessionClassifier.ClassifyUnknownSessions`. No shape change to `.sources.json`.
 - `app/SourceReportBuilder.cs` (`BuildAzureB2cSourceContext`): swap `AzureB2cAuthenticationScanner.Scan(sessions).Requests.Select(...)` for `Auth.AuthFlowDetector.Detect(sessions).Flows.Where(f => f.IsAzureB2c).SelectMany(f => f.RelatedSessionIds).ToHashSet()`, still computed once outside the per-session loop. `ClassifySession(targetSession, previousSessions)` → `Auth.SessionClassifier.ClassifySession(...)`.
@@ -174,7 +174,7 @@ Sessions arrive already ordered by `SessionId` ascending (`SazPlanBuilder.Build`
 ## Implementation Order
 
 0. **Mechanical relocation**: move `RequestType`/`ResponseType` to `Auth`, retype `Request.cs`/`Response.cs`/`RequestSources.cs`, delete old `AzureB2c/RequestType.cs`/`ResponseType.cs`. Fix call sites to compile.
-1. **Endpoint classification**: `OAuthParameterHelpers.cs`, `EndpointClassifier.cs`, `OidcDiscoveryDocument.cs` + parser, `SessionClassifier.cs` (new grant-type branches). Port `SessionClassifier_Tests.cs`. Wire `Program.cs`/`SazPlanBuilder.cs`/`SourceReportBuilder.cs`. Checkpoint: solution compiles, `.plan.json`/`.sources.json` unchanged.
+1. **Endpoint classification**: `OAuthParameterHelpers.cs`, `EndpointClassifier.cs`, `OidcDiscoveryDocument.cs` + parser, `SessionClassifier.cs` (new grant-type branches). Port `SessionClassifier_Tests.cs`. Wire `Program.cs`/`SazPlanBuilder.cs`/`SourceReportBuilder.cs`. Checkpoint: solution compiles, `.sessions.json`/`.sources.json` unchanged.
 2. **Flow correlation**: `DetectedAuthenticationFlow.cs`, `AuthFlowType.cs`, `FlowCorrelator.cs`, skeleton `AuthFlowDetector.cs`. Correlation tests.
 3. **Variable extraction**: `VariableCategory.cs`, `VariableSource.cs`, `Variable.cs`, `VariableExtractor.cs`. `VariableClassification_Tests.cs`.
 4. **B2C enrichment**: repurpose `app/AzureB2c/` (`B2cDetector.cs`, `B2cFlowDetails.cs`, `B2cCookieNames.cs`, `B2cEnricher.cs`), wire into `AuthFlowDetector` and `SourceReportBuilder.BuildAzureB2cSourceContext`. `B2cEnricher_Tests.cs`; re-verify `SourceReportBuilder_Tests.cs`.
@@ -186,4 +186,4 @@ Sessions arrive already ordered by `SessionId` ascending (`SazPlanBuilder.Build`
 
 - `dotnet build` after each phase checkpoint (0, 1, 6) to catch compile drift early.
 - `dotnet test` after every phase — full suite must stay green.
-- End-to-end manual check: run `dotnet run -- <existing-sample.saz> --out plan.json` (a real capture, e.g. from `saz/` if present) and inspect the generated `.b2c.json` for a sane `AuthFlowDetectionResult` shape (flows, variables, replay requirements, warnings) plus confirm `.plan.json`/`.sources.json` are byte-for-byte unchanged in structure (values may still differ if unrelated).
+- End-to-end manual check: run `dotnet run -- <existing-sample.saz> --out sessions.json` (a real capture, e.g. from `saz/` if present) and inspect the generated `.b2c.json` for a sane `AuthFlowDetectionResult` shape (flows, variables, replay requirements, warnings) plus confirm `.sessions.json`/`.sources.json` are byte-for-byte unchanged in structure (values may still differ if unrelated).

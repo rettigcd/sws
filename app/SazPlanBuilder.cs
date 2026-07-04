@@ -113,14 +113,14 @@ internal static class SazPlanBuilder {
 
 	/// <summary>
 	/// Derives a sibling report path next to the main plan output, stripping a trailing
-	/// ".plan" segment (if present) so sibling reports read as "<name>.sources.json" rather
-	/// than "<name>.plan.sources.json".
+	/// ".sessions" segment (if present) so sibling reports read as "<name>.sources.json" rather
+	/// than "<name>.sessions.sources.json".
 	/// </summary>
 	internal static string DeriveSiblingOutputPath(string planOutputPath, string suffixWithExtension) {
 		var directory = Path.GetDirectoryName(planOutputPath) ?? string.Empty;
 		var fileName = Path.GetFileName(planOutputPath);
-		var baseName = fileName.EndsWith(".plan.json", StringComparison.OrdinalIgnoreCase)
-			? fileName[..^".plan.json".Length]
+		var baseName = fileName.EndsWith(".sessions.json", StringComparison.OrdinalIgnoreCase)
+			? fileName[..^".sessions.json".Length]
 			: Path.GetFileNameWithoutExtension(fileName);
 
 		return Path.Combine(directory, baseName + suffixWithExtension);

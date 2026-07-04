@@ -91,7 +91,7 @@ static string ResolveOutputPath(string inputPath, string? outputPath) {
 		return Path.Combine(inputDirectory, outputPath);
 	}
 
-	return Path.ChangeExtension(inputPath, ".plan.json");
+	return Path.ChangeExtension(inputPath, ".sessions.json");
 }
 
 static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
