@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -87,6 +88,7 @@ internal static class SazPlanBuilder {
 			IndentCharacter = '\t',
 			IndentSize = 1,
 			DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+			Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 		};
 
 		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

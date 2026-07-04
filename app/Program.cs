@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -100,6 +101,7 @@ static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
 		IndentCharacter = '\t',
 		IndentSize = 1,
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 	});
 
 	File.WriteAllText(outputPath, json, Encoding.UTF8);
@@ -115,6 +117,7 @@ static void WriteAuthFlowReportAsJson(
 		IndentCharacter = '\t',
 		IndentSize = 1,
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 	});
 
 	File.WriteAllText(outputPath, json, Encoding.UTF8);
