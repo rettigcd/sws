@@ -6,7 +6,7 @@ internal static class Steps {
 
 	/// <returns>
 	/// <see cref="StepResult.IndexPageRetrieved"/> if the endpoint returned a successful HTML response, populating
-	/// <see cref="Context.IndexPageHtml"/> and <see cref="Context.JavascriptScripts"/>.
+	/// <see cref="Context.JavascriptScripts"/> and <see cref="Context.CurrentPage"/>.
 	/// </returns>
 	public static async Task<StepResult> GetIndexPageAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
@@ -30,19 +30,46 @@ internal static class Steps {
 			throw new InvalidOperationException($"Index page endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		var html = await response.Content.ReadAsStringAsync();
-		ctx.IndexPageHtml = html;
 
 		var browsingContext = BrowsingContext.New(Configuration.Default);
 		var document = await browsingContext.OpenAsync(req => req.Content(html).Address(requestUri)).ConfigureAwait(false);
 		var baseUri = new Uri(requestUri);
 
-		ctx.JavascriptScripts = document.QuerySelectorAll("script[src]")
+		var scriptUris = document.QuerySelectorAll("script[src]")
 			.Select(script => script.GetAttribute("src"))
 			.Where(src => !string.IsNullOrWhiteSpace(src))
 			.Select(src => new Uri(baseUri, src!).ToString())
 			.ToList();
 
+		if (scriptUris.Count == 0)
+			throw new InvalidOperationException("Index page did not contain any <script src> tags.");
+
+		ctx.JavascriptScripts.AddRange(scriptUris);
+		ctx.CurrentPage = requestUri;
+
 		return StepResult.IndexPageRetrieved;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.ScriptRequested"/> once the script resource returns a successful response; the response body is discarded.
+	/// </returns>
+	public static async Task<StepResult> RequestGenericScriptAsync(Context ctx, string uri) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+
+		var request = new HttpRequestMessage(HttpMethod.Get, uri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "*/*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "script");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "no-cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Script endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		return StepResult.ScriptRequested;
 	}
 
 }

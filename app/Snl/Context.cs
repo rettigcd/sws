@@ -7,10 +7,11 @@ internal class Context {
 	// Set after instantiation, before any Steps methods are called.
 	public IAuthHttpClient? Http { get; set; }
 
-	// The index/landing page HTML retrieved by GetIndexPageAsync.
-	public string? IndexPageHtml { get; set; }
+	// Absolute src URLs of <script> tags found on the index page, populated by GetIndexPageAsync.
+	// Populated via AddRange, not by replacing the list itself.
+	public List<string> JavascriptScripts { get; } = [];
 
-	// Absolute src URLs of <script> tags found in IndexPageHtml, populated by GetIndexPageAsync.
-	public List<string>? JavascriptScripts { get; set; }
+	// URL of the most recently requested page, used to supply the Referrer header on later requests.
+	public string? CurrentPage { get; set; }
 
 }

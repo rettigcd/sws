@@ -16,6 +16,9 @@ instructions are given; one-off feature requests (e.g. "add a step that does X")
     construction time.
   - When a new `Steps` method needs additional data, add the corresponding property to `Context` and
     comment its purpose.
+  - Do not save full page responses (e.g. raw HTML bodies) to `Context` as a general rule. The user will
+    give detailed instructions on what (if anything) needs to be extracted and saved from each response —
+    only add the specific extracted value(s) they ask for, not the whole response.
 
 - **`Steps`**:
   - Static class. Each method has the signature `Task<StepResult> DoSomethingAsync(Context ctx)`.
@@ -25,6 +28,7 @@ instructions are given; one-off feature requests (e.g. "add a step that does X")
     output wasn't populated on `Context`), a non-success HTTP response, an unparseable response, an
     unexpected response shape, etc. — throws an exception. `StepResult` values only ever represent
     expected, successful flow branches.
+  - All requests should set the `Referer` header from `Context.CurrentPage` if it is not `null`.
 
 - **`StepResult`**:
   - Prefer specific, descriptive result names over generic ones (e.g. `WellKnownConfigRetrieved` rather
