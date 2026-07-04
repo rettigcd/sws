@@ -40,6 +40,26 @@ public class TicketSession {
 		await Steps.GetSeriesEventsAsync(_context);
 		// snl3 - SessionId: 24
 		await Steps.SubmitUiInteractionEventsAsync(_context);
+		// snl3 - SessionId: 26
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/choose-event.html");
+		// snl3 - SessionId: 27
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/select-language/select-language.html");
+		// snl3 - SessionId: 28
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/cookie-policy/cookie-policy.html");
+		// snl3 - SessionId: 29
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/privacy-policy/privacy-policy.html");
+		// snl3 - SessionId: 30
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/shared/terms-conditions/terms-conditions.html");
+		// snl3 - SessionId: 32
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/datepicker/datepicker.html");
+		// snl3 - SessionId: 33
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/social-share-buttons/social-share-buttons.html");
+		// snl3 - SessionId: 34
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/filter-topics/filter-topics.html");
+		// snl3 - SessionId: 35
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/other-stores/stores.html");
+		// snl3 - SessionId: 36
+		await Steps.RequestGenericAsync(_context, "https://bookings-us.qudini.com/eventsBooking/components/choose-event/event-thumbnail.html");
 	}
 
 }
