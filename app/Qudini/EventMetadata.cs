@@ -1,4 +1,4 @@
-namespace Snl;
+namespace Qudini;
 
 // Core subset of the event JSON returned by GetSeriesEventsAsync. More fields are available in the
 // raw response (shop address/geo/phone, topic details, description, image/banner URLs, waitlist

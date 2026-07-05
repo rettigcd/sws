@@ -1,7 +1,7 @@
 using System.Text.Json;
 using AngleSharp;
 
-namespace Snl;
+namespace Qudini;
 
 internal static class Steps {
 

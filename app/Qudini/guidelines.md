@@ -1,9 +1,9 @@
-# Snl namespace — guidelines
+# Qudini namespace — guidelines
 
-Running list of standing instructions for the `Snl` namespace. Update this file as new general
+Running list of standing instructions for the `Qudini` namespace. Update this file as new general
 instructions are given; one-off feature requests (e.g. "add a step that does X") don't belong here.
 
-- **Design goal**: minimal parameters, minimal dependencies. Prefer self-contained code in `Snl` over
+- **Design goal**: minimal parameters, minimal dependencies. Prefer self-contained code in `Qudini` over
   reusing types from `Automation` that carry extra parameters/coupling.
   - Exception: `Automation.IAuthHttpClient` is reused directly as the HTTP abstraction rather than
     redefining an equivalent interface.
@@ -38,7 +38,7 @@ instructions are given; one-off feature requests (e.g. "add a step that does X")
     than `Success`) so each value's meaning is unambiguous without reading the method that produced it.
 
 - **`TicketSession`**:
-  - The only public entry point into `Snl`. `Context` is `internal`, so callers never see or construct
+  - The only public entry point into `Qudini`. `Context` is `internal`, so callers never see or construct
     it directly — `TicketSession` owns a private `Context` and exposes it piecemeal.
   - Configuration is exposed via small public `Init*` methods, each setting one related group of `Context`
     properties, rather than exposing `Context` itself or a single do-everything constructor/method.

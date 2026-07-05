@@ -1,4 +1,4 @@
-namespace Snl;
+namespace Qudini;
 public class Templates {
 	public const string Footer               = "https://bookings-us.qudini.com/shared/footer/q-footer.html";
 	public const string CookiePolicy         = "https://bookings-us.qudini.com/shared/cookie-policy/cookie-policy.html";

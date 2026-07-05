@@ -1,4 +1,4 @@
-namespace Snl;
+namespace Qudini;
 
 // Raw JSON response shapes for deserialization only. See EventMetadata for the extracted subset
 // actually needed by Steps/TicketSession.

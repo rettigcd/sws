@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Snl;
+namespace Qudini;
 
 // Matches the JSON shape expected by the session analytics endpoint (see PostSessionAnalyticsEventsAsync).
 // Property names are lowercase to match the wire format exactly, without needing JsonPropertyName attributes.

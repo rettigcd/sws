@@ -1,4 +1,4 @@
-namespace Snl;
+namespace Qudini;
 
 public enum StepResult {
 	None, // default

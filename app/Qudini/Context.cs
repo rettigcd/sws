@@ -1,6 +1,6 @@
 using Automation;
 
-namespace Snl;
+namespace Qudini;
 
 internal class Context {
 
