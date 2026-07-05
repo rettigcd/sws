@@ -63,7 +63,7 @@ internal static class Steps {
 	/// <returns>
 	/// <see cref="StepResult.ScriptRequested"/> once the script resource returns a successful response; the response body is discarded.
 	/// </returns>
-	public static async Task<StepResult> ____RequestGenericAsync(Context ctx, string uri) {
+	public static async Task<StepResult> RequestGenericAsync(Context ctx, string uri) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 
 		var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -141,7 +141,7 @@ internal static class Steps {
 	/// <returns>
 	/// <see cref="StepResult.ConfigRetrieved"/> once the series config endpoint returns a successful response.
 	/// </returns>
-	public static async Task<StepResult> GetSeriesConfigAsync(Context ctx) {
+	public static async Task<StepResult> GetSeries_ConfigAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
 
@@ -159,6 +159,48 @@ internal static class Steps {
 		// TODO: parse the response and populate Context once the shape it's needed for is known.
 
 		return StepResult.ConfigRetrieved;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.TopicsRetrieved"/> once the series topics endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> GetSeries_TopicsAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+
+		string requestUri = $"https://bookings-us.qudini.com/booking-widget/event/topics/{seriesId}";
+		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		AddJsonGetHeaders(request);
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Series topics endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		return StepResult.TopicsRetrieved;
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.VenuesRetrieved"/> once the series venues endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> GetSeries_VenuesAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+
+		string requestUri = $"https://bookings-us.qudini.com/booking-widget/event/venues/{seriesId}";
+		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		AddJsonGetHeaders(request);
+
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Series venues endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		return StepResult.VenuesRetrieved;
 	}
 
 	/// <returns>
@@ -205,10 +247,6 @@ internal static class Steps {
 			StoreIdentifier: shop.GetProperty("storeIdentifier").GetString() ?? throw new InvalidOperationException("Event's shop did not have a storeIdentifier.")
 		);
 	}
-
-	/// <summary>The event this session is booking - the first event returned by GetSeriesEventsAsync.</summary>
-	public static EventMetadata GetSelectedEvent(Context ctx) =>
-		ctx.Events.Count > 0 ? ctx.Events[0] : throw new InvalidOperationException("Context.Events is not set.");
 
 	/// <returns>
 	/// <see cref="StepResult.LanguageOptionsRetrieved"/> once the series languages endpoint returns a successful response.
@@ -301,7 +339,7 @@ internal static class Steps {
 	public static async Task<StepResult> CreateEventBookingSessionAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
-		string eventId = GetSelectedEvent(ctx).Identifier;
+		string eventId = (ctx.SelectedEvent ?? throw new InvalidOperationException("Context.SelectedEvent is not set.")).Identifier;
 		string bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
 		string bwUserId = ctx.BwUserId ?? throw new InvalidOperationException("Context.BwUserId is not set.");
 
@@ -342,8 +380,8 @@ internal static class Steps {
 
 	/// <summary>Builds the "Select Item Event Thumbnail" analytics event, labeled with the given event title.</summary>
 	public static ClickAnalyticsEvent BuildItemEventThumbnailSelectedEvent(Context ctx) {
-		string eventTitle = GetSelectedEvent(ctx).Title;
-		return new("Select Item Event Thumbnail", new ClickAnalyticsEventProperties($"Event Booking: event selected ({eventTitle})", "click", "Event"));
+		string eventTitle = (ctx.SelectedEvent ?? throw new InvalidOperationException("Context.SelectedEvent is not set.")).Title;
+		return ClickAnalyticsEvent.Click("Select Item Event Thumbnail", $"Event Booking: event selected ({eventTitle})");
 	}
 
 	/// <returns>
@@ -353,7 +391,9 @@ internal static class Steps {
 	public static async Task<StepResult> CreateBookingAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
-		int eventId = GetSelectedEvent(ctx).Id;
+		var selectedEvent = ctx.SelectedEvent ?? throw new InvalidOperationException("Context.SelectedEvent is not set.");
+		int eventId = selectedEvent.Id;
+		int groupSize = Math.Min(ctx.GroupSize, selectedEvent.MaxGroupSize);
 		string firstName = ctx.FirstName ?? throw new InvalidOperationException("Context.FirstName is not set.");
 		string lastName = ctx.LastName ?? throw new InvalidOperationException("Context.LastName is not set.");
 		string email = ctx.Email ?? throw new InvalidOperationException("Context.Email is not set.");

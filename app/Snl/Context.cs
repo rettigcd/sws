@@ -14,6 +14,9 @@ internal class Context {
 	// Populated via AddRange, not by replacing the list itself.
 	public List<EventMetadata> Events { get; } = [];
 
+	// Set explicitly in GetXXXTicketsAsync after GetSeriesEventsAsync.
+	public EventMetadata? SelectedEvent { get; set; }
+
 	// Absolute src URLs of <script> tags found on the index page, populated by GetIndexPageAsync.
 	// Populated via AddRange, not by replacing the list itself.
 	public List<string> JavascriptScripts { get; } = [];

@@ -8,6 +8,8 @@ public enum StepResult {
 	SessionNotFound,
 	WidgetSessionRegistered,
 	ConfigRetrieved,
+	TopicsRetrieved,
+	VenuesRetrieved,
 	EventsRetrieved,
 	LanguageOptionsRetrieved,
 	LanguageDictRetrieved,
