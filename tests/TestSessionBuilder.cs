@@ -50,7 +50,7 @@ static class TestSessionBuilder {
 			Auth.ResponseType.Unknown
 		);
 
-		return new Session(sessionId, null, request, response);
+		return new Session(sessionId, null, null, request, response);
 	}
 
 	static Dictionary<string, string> ParseQueryParameters(Uri uri) {

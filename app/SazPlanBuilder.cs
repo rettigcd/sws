@@ -265,7 +265,13 @@ internal static class SazPlanBuilder {
 	}
 
 	static Session BuildSessionPlan(SessionRaw raw, bool includeMetadata) {
-		var metadata = includeMetadata ? SazMetadataParser.Parse(raw.MetadataBytes, raw.Id) : null;
+		var parsedMetadata = SazMetadataParser.Parse(raw.MetadataBytes, raw.Id);
+		var metadata = includeMetadata ? parsedMetadata : null;
+
+		DateTimeOffset? timestamp = null;
+		if (parsedMetadata.Timers.TryGetValue("ClientBeginRequest", out var tsStr)
+			&& DateTimeOffset.TryParse(tsStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var ts))
+			timestamp = ts;
 		var request = SazHttpMessageParser.Parse(raw.ClientRequestBytes, isRequest: true);
 		var response = SazHttpMessageParser.Parse(raw.ServerResponseBytes, isRequest: false);
 
@@ -324,6 +330,7 @@ internal static class SazPlanBuilder {
 
 		return new Session(
 			raw.Id,
+			timestamp,
 			metadata,
 			requestPlan,
 			responsePlan
