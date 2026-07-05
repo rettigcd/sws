@@ -64,33 +64,48 @@ internal static class Steps {
 	}
 
 
-	// !!! TODO
-	// Spllit Request Generic into:
-	// - RequestScriptAsync
-	// - RequestTemplateAsync
-	// - RequestJsonResourceAsync
-
-	// !!! maybe these generic things should never throw an exception because in theory they are throw away.
-
-	/// <returns>
-	/// <see cref="StepResult.ScriptRequested"/> once the script resource returns a successful response; the response body is discarded.
-	/// </returns>
-	public static async Task<StepResult> RequestGenericAsync(Context ctx, string uri) {
+	public static async Task<StepResult> RequestScriptAsync(Context ctx, string uri) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
-
 		var request = new HttpRequestMessage(HttpMethod.Get, uri);
 		if (ctx.CurrentPage is not null)
 			request.Headers.Referrer = new Uri(ctx.CurrentPage);
-
 		request.Headers.TryAddWithoutValidation("Accept", "*/*");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "script");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "no-cors");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
-
 		using var response = await http.SendAsync(request);
 		if (!response.IsSuccessStatusCode)
 			throw new InvalidOperationException($"Script endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+		return StepResult.ScriptRequested;
+	}
 
+	public static async Task<StepResult> RequestTemplateAsync(Context ctx, string uri) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var request = new HttpRequestMessage(HttpMethod.Get, uri);
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Template endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+		return StepResult.ScriptRequested;
+	}
+
+	public static async Task<StepResult> RequestJsonResourceAsync(Context ctx, string uri) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		var request = new HttpRequestMessage(HttpMethod.Get, uri);
+		request.Headers.Referrer = new Uri("https://bookings-us.qudini.com/");
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Origin", "https://bookings-us.qudini.com");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-site");
+		using var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"JSON resource endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 		return StepResult.ScriptRequested;
 	}
 
