@@ -175,6 +175,10 @@ public class TicketSession {
 			await Steps.PostSessionAnalyticsEventsAsync(_context
 				, ClickAnalyticsEvent.Click("Book Event Button Event Details", "Event Booking: book event button")
 				, ClickAnalyticsEvent.Click("firstName", "First Name")
+				, ClickAnalyticsEvent.Click("lastName", "Last Name")
+				, ClickAnalyticsEvent.Click("email", "Email")
+				, ClickAnalyticsEvent.Click("mobileNumber", "Phone number")
+				, ClickAnalyticsEvent.Click("groupSize", "Group Size")
 			);// snl_may_14(61)
 
 		// ---- Create Booking (we got a 400) ----
