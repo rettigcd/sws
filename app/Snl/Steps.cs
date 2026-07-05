@@ -14,7 +14,8 @@ internal static class Steps {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
 
-		string requestUri = $"https://bookings-us.qudini.com/booking-widget/events/{seriesId}/event/choose";
+		// Some sessions may append "/event/choose" to end of Uri but that can be discard and ignored.
+		string requestUri = $"https://bookings-us.qudini.com/booking-widget/events/{seriesId}";
 		var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
 		request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
 		request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
@@ -87,6 +88,54 @@ internal static class Steps {
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+	}
+
+	/// <returns>
+	/// <see cref="StepResult.WidgetSessionRegistered"/> once the widget session registration endpoint returns a successful response.
+	/// </returns>
+	public static async Task<StepResult> RegisterWidgetSessionAsync(Context ctx) {
+		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
+		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
+		string bwSessionId = ctx.BwSessionId ?? throw new InvalidOperationException("Context.BwSessionId is not set.");
+		string bwUserId = ctx.BwUserId ?? throw new InvalidOperationException("Context.BwUserId is not set.");
+
+		string requestUri = $"https://bookings-us.qudini.com/event-series/{seriesId}/session";
+		string json = JsonSerializer.Serialize(new {
+			userID = bwUserId,
+			sessions = new[] {
+				new {
+					path = (string?)null,
+					action = (string?)null,
+					properties = Array.Empty<object>(),
+					sessionID = bwSessionId,
+					device = "unknown",
+					os = "windows",
+					osVersion = "windows-10",
+					browser = "chrome",
+					browserVersion = "149.0.0.0",
+					referrer = ctx.CurrentPage ?? "",
+					kioskIdentifier = (string?)null,
+				}
+			},
+		});
+
+		var request = new HttpRequestMessage(HttpMethod.Post, requestUri) {
+			Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+		};
+		if (ctx.CurrentPage is not null)
+			request.Headers.Referrer = new Uri(ctx.CurrentPage);
+
+		request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+		request.Headers.TryAddWithoutValidation("Origin", "https://bookings-us.qudini.com");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+
+		var response = await http.SendAsync(request);
+		if (!response.IsSuccessStatusCode)
+			throw new InvalidOperationException($"Widget session registration endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
+
+		return StepResult.WidgetSessionRegistered;
 	}
 
 	/// <returns>
@@ -215,7 +264,7 @@ internal static class Steps {
 	/// <see cref="StepResult.AnalyticsSubmitted"/> once the events endpoint returns a successful response.
 	/// <see cref="StepResult.SessionNotFound"/> if the response JSON has "status": 404.
 	/// </returns>
-	public static async Task<StepResult> ____PostSessionAnalyticsEventsAsync(Context ctx, params ClickAnalyticsEvent[] events) {
+	public static async Task<StepResult> PostSessionAnalyticsEventsAsync(Context ctx, params ClickAnalyticsEvent[] events) {
 		string json = JsonSerializer.Serialize(events);
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");

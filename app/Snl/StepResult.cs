@@ -6,6 +6,7 @@ public enum StepResult {
 	ScriptRequested,
 	AnalyticsSubmitted,
 	SessionNotFound,
+	WidgetSessionRegistered,
 	ConfigRetrieved,
 	EventsRetrieved,
 	LanguageOptionsRetrieved,
