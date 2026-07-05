@@ -5,7 +5,7 @@ namespace Snl;
 internal class Context {
 
 	// Set after instantiation, before any Steps methods are called.
-	public IAuthHttpClient? Http { get; set; }
+	public required IAuthHttpClient Http { get; set; }
 
 	// Event-series identifier, e.g. "UZJLSRJUNZC". Set after instantiation, before GetIndexPageAsync is called.
 	public string? SeriesId { get; set; }
@@ -31,10 +31,7 @@ internal class Context {
 	public string? BwUserId { get; set; }
 
 	// Attendee details for CreateBookingAsync. Set after instantiation, before CreateBookingAsync is called.
-	public string? FirstName { get; set; }
-	public string? LastName { get; set; }
-	public string? Email { get; set; }
-	public string? MobileNumber { get; set; }
+	public UserInfo? User { get; set; }
 
 	// Attendee group size for CreateBookingAsync. Defaults to 1.
 	public int GroupSize { get; set; } = 1;

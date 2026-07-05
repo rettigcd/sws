@@ -5,6 +5,9 @@ namespace Snl;
 
 internal static class Steps {
 
+	// !!! cleanup headers - maybe remove ones that are not required
+	// - kkep Accept, Origin, Referer
+
 	/// <returns>
 	/// <see cref="StepResult.IndexPageRetrieved"/> if the endpoint returned a successful HTML response, populating
 	/// <see cref="Context.JavascriptScripts"/>, <see cref="Context.CurrentPage"/>, <see cref="Context.BwSessionId"/>,
@@ -59,6 +62,15 @@ internal static class Steps {
 
 		return StepResult.IndexPageRetrieved;
 	}
+
+
+	// !!! TODO
+	// Spllit Request Generic into:
+	// - RequestScriptAsync
+	// - RequestTemplateAsync
+	// - RequestJsonResourceAsync
+
+	// !!! maybe these generic things should never throw an exception because in theory they are throw away.
 
 	/// <returns>
 	/// <see cref="StepResult.ScriptRequested"/> once the script resource returns a successful response; the response body is discarded.
@@ -391,13 +403,12 @@ internal static class Steps {
 	public static async Task<StepResult> CreateBookingAsync(Context ctx) {
 		var http = ctx.Http ?? throw new InvalidOperationException("Context.Http is not set.");
 		string seriesId = ctx.SeriesId ?? throw new InvalidOperationException("Context.SeriesId is not set.");
-		var selectedEvent = ctx.SelectedEvent ?? throw new InvalidOperationException("Context.SelectedEvent is not set.");
-		int eventId = selectedEvent.Id;
-		int groupSize = Math.Min(ctx.GroupSize, selectedEvent.MaxGroupSize);
-		string firstName = ctx.FirstName ?? throw new InvalidOperationException("Context.FirstName is not set.");
-		string lastName = ctx.LastName ?? throw new InvalidOperationException("Context.LastName is not set.");
-		string email = ctx.Email ?? throw new InvalidOperationException("Context.Email is not set.");
-		string mobileNumber = ctx.MobileNumber ?? throw new InvalidOperationException("Context.MobileNumber is not set.");
+		int eventId = (ctx.SelectedEvent ?? throw new InvalidOperationException("Context.SelectedEvent is not set.")).Id;
+		var user = ctx.User ?? throw new InvalidOperationException("Context.User is not set.");
+		string firstName = user.FirstName ?? throw new InvalidOperationException("UserInfo.FirstName is not set.");
+		string lastName = user.LastName ?? throw new InvalidOperationException("UserInfo.LastName is not set.");
+		string email = user.Email ?? throw new InvalidOperationException("UserInfo.Email is not set.");
+		string mobileNumber = user.MobileNumber ?? throw new InvalidOperationException("UserInfo.MobileNumber is not set.");
 
 		string requestUri = $"https://bookings-us.qudini.com/booking-widget/series/{seriesId}/event/book";
 		string json = JsonSerializer.Serialize(new {
