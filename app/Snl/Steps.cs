@@ -5,6 +5,8 @@ namespace Snl;
 
 internal static class Steps {
 
+	static readonly JsonSerializerOptions s_jsonOptions = new(JsonSerializerDefaults.Web);
+
 	// !!! cleanup headers - maybe remove ones that are not required
 	// - kkep Accept, Origin, Referer
 
@@ -250,30 +252,26 @@ internal static class Steps {
 			throw new InvalidOperationException($"Series events endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		string responseJson = await response.Content.ReadAsStringAsync();
-		using var document = JsonDocument.Parse(responseJson);
-		var events = document.RootElement;
-		if (events.ValueKind != JsonValueKind.Array || events.GetArrayLength() == 0)
+		List<EventDto>? events = JsonSerializer.Deserialize<List<EventDto>>(responseJson, s_jsonOptions);
+		if (events is null || events.Count == 0)
 			throw new InvalidOperationException("Series events endpoint did not return any events.");
 
-		ctx.Events.AddRange(events.EnumerateArray().Select(ParseEventMetadata));
+		ctx.Events.AddRange(events.Select(ToEventMetadata));
 
 		return StepResult.EventsRetrieved;
 	}
 
-	static EventMetadata ParseEventMetadata(JsonElement e) {
-		var shop = e.GetProperty("shop");
-		return new EventMetadata(
-			Id: e.GetProperty("id").GetInt32(),
-			Identifier: e.GetProperty("identifier").GetString() ?? throw new InvalidOperationException("Event did not have an identifier."),
-			Title: e.GetProperty("title").GetString() ?? throw new InvalidOperationException("Event did not have a title."),
-			StartIso: e.GetProperty("startISO").GetString() ?? throw new InvalidOperationException("Event did not have a startISO."),
-			SlotsAvailable: e.GetProperty("slotsAvailable").GetInt32(),
-			MaxGroupSize: e.GetProperty("maxGroupSize").GetInt32(),
-			HasPassed: e.GetProperty("hasPassed").GetBoolean(),
-			StoreName: shop.GetProperty("storeName").GetString() ?? throw new InvalidOperationException("Event's shop did not have a storeName."),
-			StoreIdentifier: shop.GetProperty("storeIdentifier").GetString() ?? throw new InvalidOperationException("Event's shop did not have a storeIdentifier.")
-		);
-	}
+	static EventMetadata ToEventMetadata(EventDto dto) => new(
+		Id: dto.Id,
+		Identifier: dto.Identifier,
+		Title: dto.Title,
+		StartIso: dto.StartISO,
+		SlotsAvailable: dto.SlotsAvailable,
+		MaxGroupSize: dto.MaxGroupSize,
+		HasPassed: dto.HasPassed,
+		StoreName: dto.Shop.StoreName,
+		StoreIdentifier: dto.Shop.StoreIdentifier
+	);
 
 	/// <returns>
 	/// <see cref="StepResult.LanguageOptionsRetrieved"/> once the series languages endpoint returns a successful response.
@@ -353,8 +351,8 @@ internal static class Steps {
 			throw new InvalidOperationException($"Event thumbnail clicked analytics endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		string responseJson = await response.Content.ReadAsStringAsync();
-		using var document = JsonDocument.Parse(responseJson);
-		if (document.RootElement.TryGetProperty("status", out var status) && status.GetInt32() == 404)
+		SessionAnalyticsResponseDto? result = JsonSerializer.Deserialize<SessionAnalyticsResponseDto>(responseJson, s_jsonOptions);
+		if (result?.Status == 404)
 			return StepResult.SessionNotFound;
 
 		return StepResult.AnalyticsSubmitted;
@@ -455,8 +453,8 @@ internal static class Steps {
 			throw new InvalidOperationException($"Booking endpoint returned {(int)response.StatusCode} {response.StatusCode}.");
 
 		string responseJson = await response.Content.ReadAsStringAsync();
-		using var document = JsonDocument.Parse(responseJson);
-		ctx.BookingReferenceNumber = document.RootElement.GetProperty("refNumber").GetString()
+		CreateBookingResponseDto? result = JsonSerializer.Deserialize<CreateBookingResponseDto>(responseJson, s_jsonOptions);
+		ctx.BookingReferenceNumber = result?.RefNumber
 			?? throw new InvalidOperationException("Booking endpoint response did not have a refNumber.");
 
 		return StepResult.BookingCreated;
