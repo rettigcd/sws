@@ -131,16 +131,16 @@ public class TicketSession {
 		await Steps.GetIndexPageAsync(_context);
 
 		// snl3(21), snl1(2)
-		await Steps.GetSeriesConfigAsync(_context);
+		// await Steps.GetSeriesConfigAsync(_context);
 
 		// snl3(23), snl1(7)
 		await Steps.GetSeriesEventsAsync(_context);
 
 		// snl3(37), snl1(9)
-		await Steps.GetSeriesLanguagesAsync(_context);
+		// await Steps.GetSeriesLanguagesAsync(_context);
 
 		// snl3(40)
-		await Steps.GetSeriesTranslationAsync(_context);
+		// await Steps.GetSeriesTranslationAsync(_context);
 
 		// snl3(42), snl1(12)
 		await Steps.CreateEventBookingSessionAsync(_context);
