@@ -1,9 +1,13 @@
 namespace Qudini;
 
-class Extensions {
+static internal class Extensions {
 
-	async Task<HttpResponseMessage> SendHedgedAsync(
-		Func<CancellationToken, Task<HttpResponseMessage>> send,
+	static internal async Task<StepResult> Bob(this Func<Context,Task<StepResult>> action, Context context) {
+		return await action(context);
+	}
+
+	static async Task<HttpResponseMessage> SendHedgedAsync(
+		this Func<Context, CancellationToken, Task<StepResult>> send,
 		TimeSpan hedgeDelay,
 		int maxAttempts,
 		CancellationToken outerToken
@@ -40,4 +44,55 @@ class Extensions {
 
 		throw new HttpRequestException("All hedged attempts failed.");
 	}
+
 }
+
+
+// public sealed class RetryingStep<TContext> : IAuthStep<TContext> {
+
+// 	readonly IAuthStep<TContext> inner;
+// 	readonly RetryPolicy policy;
+// 	readonly ILogger logger;
+
+// 	public string Name => inner.Name;
+
+// 	public RetryingStep( IAuthStep<TContext> inner, RetryPolicy policy, ILogger logger) {
+// 		this.inner = inner;
+// 		this.policy = policy;
+// 		this.logger = logger;
+// 	}
+
+// 	public async Task<StepResult> ExecuteAsync( TContext context, CancellationToken cancellationToken) {
+// 		for (int attempt = 1; attempt <= policy.MaxAttempts; attempt++) {
+// 			using var attemptCts =
+// 				CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+// 			attemptCts.CancelAfter(policy.AttemptTimeout);
+
+// 			try {
+// 				logger.LogInformation("Executing step {StepName}, attempt {Attempt}/{MaxAttempts}",Name,attempt,policy.MaxAttempts);
+
+// 				StepResult result = await inner.ExecuteAsync(context, attemptCts.Token);
+
+// 				if (result.IsSuccess)
+// 					return result;
+
+// 				logger.LogWarning("Step {StepName}, attempt {Attempt} failed: {Reason}",Name,attempt,result.ErrorMessage);
+
+// 				if (!result.IsRetriable)
+// 					return result;
+// 			}
+// 			catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) {
+// 				logger.LogWarning("Step {StepName}, attempt {Attempt} timed out after {Timeout}",Name,attempt,policy.AttemptTimeout);
+// 			}
+// 			catch (Exception ex) {
+// 				logger.LogWarning(ex,"Step {StepName}, attempt {Attempt} threw an exception",Name,attempt);
+// 			}
+
+// 			if (attempt < policy.MaxAttempts && policy.DelayBetweenAttempts > TimeSpan.Zero)
+// 				await Task.Delay(policy.DelayBetweenAttempts, cancellationToken);
+// 		}
+
+// 		return StepResult.Failed($"{Name} failed after {policy.MaxAttempts} attempts.",isRetriable: false);
+// 	}
+// }
