@@ -86,12 +86,7 @@ try {
 
 	await Step4_GetSeriesSettings(context);
 
-	// ---- Step 7: the events list. ----
-	// - numeric id goes into the booking
-	// - short identifier goes into step 9.
-	// - Slots available limit group size
-	context.Events = JsonSerializer.Deserialize<List<QudiniEvent>>(await SendAsync("7. get events", JsonGet($"{context.BaseUrl}/booking-widget/event/events/{context.SeriesId}")), JsonOptions)
-		?? throw new InvalidOperationException("Events response was empty.");
+	await Step7_GetEventsList(context);
 
 	// ---- Exit Ramp ----
 	if (config.ListOnly) {
@@ -208,6 +203,15 @@ async Task Step4_GetSeriesSettings(Context context) {
 	context.SeriesSettings = JsonSerializer.Deserialize<SeriesSettings>(await SendAsync("4. get series settings", JsonGet($"{context.BaseUrl}/booking-widget/event/series/{context.SeriesId}")), JsonOptions)
 		?? throw new InvalidOperationException("Series settings response was empty.");
 	Console.WriteLine($"   attribution \"{context.SeriesSettings.DefaultAttributionQuestion}\", phone field {context.SeriesSettings.PhoneNumberState}");
+}
+
+async Task Step7_GetEventsList(Context context) {
+	// ---- Step 7: the events list. ----
+	// - numeric id goes into the booking
+	// - short identifier goes into step 9.
+	// - Slots available limit group size
+	context.Events = JsonSerializer.Deserialize<List<QudiniEvent>>(await SendAsync("7. get events", JsonGet($"{context.BaseUrl}/booking-widget/event/events/{context.SeriesId}")), JsonOptions)
+		?? throw new InvalidOperationException("Events response was empty.");
 }
 
 // Headers a Chrome browser adds to every request.
