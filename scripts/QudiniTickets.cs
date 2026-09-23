@@ -70,19 +70,8 @@ context.Http = http;
 try {
 	await Step1_GetBookingPage(context);
 
-	if (config.Analytics) {
-		// ---- Step 3: register the widget session. ----
-		await SendOptionalAsync("3. register widget session", JsonPost(
-			$"{context.BaseUrl}/event-series/{context.SeriesId}/session",
-			JsonSerializer.Serialize(new WidgetSessionRegistrationRequest {
-				UserId = context.UserId,
-				Sessions = [new EventBookingSessionRequest {
-					SessionId = context.SessionId,
-					BrowserVersion = $"{context.ChromeVersion}.0.0.0",
-					Referrer = context.IndexUrl,
-				}],
-			}, JsonOptions)));
-	}
+	if (config.Analytics)
+		await Step3_RegisterWidgetSession(context);
 
 	await Step4_GetSeriesSettings(context);
 
@@ -110,34 +99,16 @@ try {
 		context.GroupSize = effectiveMaxGroupSize;
 	}
 
-	if (config.Analytics) {
-		// ---- Step 8: report the selected date, topics, and store filters. ----
-		await PostAnalyticsAsync("8. post filter analytics",
-			ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
-			ClickAnalyticsEvent.Null("Select Topics", "Event Booking topics"),
-			ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"));
-	}
+	if (config.Analytics)
+		await Step8_PostFilterAnalytics(context);
 
 	await Step9_StartEventBookingSession(context);
 
 	if (config.Analytics)
-		// ---- Step 10: report the selected event. ----
-		await PostAnalyticsAsync("10. post event analytics",
-			ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
-			ClickAnalyticsEvent.Null("Select Topics", "Event Booking topics"),
-			ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"),
-			ClickAnalyticsEvent.Click("Select Item Event Thumbnail", $"Event Booking: event selected ({context.SelectedEvent.Title})"),
-			ClickAnalyticsEvent.Click("Select Event Thumbnail", "Event Booking: click/select thumbnail event"));
+		await Step10_PostEventAnalytics(context);
 
 	if (config.Analytics)
-		// ---- Step 12: report the booking form fields. ----
-		await PostAnalyticsAsync("12. post booking form analytics",
-			ClickAnalyticsEvent.Click("Book Event Button Event Details", "Event Booking: book event button"),
-			ClickAnalyticsEvent.Click("firstName", "First Name"),
-			ClickAnalyticsEvent.Click("lastName", "Last Name"),
-			ClickAnalyticsEvent.Click("email", "Email"),
-			ClickAnalyticsEvent.Click("mobileNumber", "Phone number"),
-			ClickAnalyticsEvent.Click("groupSize", "Group Size"));
+		await Step12_PostBookingFormAnalytics(context);
 
 	// ---- Exit Ramp ----
 	if (!config.Submit) {
@@ -149,11 +120,8 @@ try {
 
 	await Step13_SubmitBooking(context);
 
-	if (config.Analytics) {
-		// ---- Step 14: report completion of the customer details form. ----
-		await PostAnalyticsAsync("14. post booking completion analytics",
-			ClickAnalyticsEvent.Click("Complete Button Customer Details", "Event Booking: customer details complete button"));
-	}
+	if (config.Analytics)
+		await Step14_PostBookingCompletionAnalytics(context);
 
 	return 0;
 }
@@ -221,6 +189,60 @@ async Task Step13_SubmitBooking(Context context) {
 	context.BookingReference = bookingResponse?.ReferenceNumber;
 	Console.WriteLine($"   booked. Reference number: {context.BookingReference ?? "(none in response)"}");
 }
+
+// =======================================
+// ========  Analytical Steps  ===========
+// =======================================
+
+async Task Step3_RegisterWidgetSession(Context context) {
+	// ---- Step 3: register the widget session. ----
+	await SendOptionalAsync("3. register widget session", JsonPost(
+		$"{context.BaseUrl}/event-series/{context.SeriesId}/session",
+		JsonSerializer.Serialize(new WidgetSessionRegistrationRequest {
+			UserId = context.UserId,
+			Sessions = [new EventBookingSessionRequest {
+				SessionId = context.SessionId,
+				BrowserVersion = $"{context.ChromeVersion}.0.0.0",
+				Referrer = context.IndexUrl,
+			}],
+		}, JsonOptions)));
+}
+
+async Task Step8_PostFilterAnalytics(Context context) {
+	// ---- Step 8: report the selected date, topics, and store filters. ----
+	await PostAnalyticsAsync("8. post filter analytics",
+		ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
+		ClickAnalyticsEvent.Null("Select Topics", "Event Booking topics"),
+		ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"));
+}
+
+async Task Step10_PostEventAnalytics(Context context) {
+	// ---- Step 10: report the selected event. ----
+	await PostAnalyticsAsync("10. post event analytics",
+		ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
+		ClickAnalyticsEvent.Null("Select Topics", "Event Booking topics"),
+		ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"),
+		ClickAnalyticsEvent.Click("Select Item Event Thumbnail", $"Event Booking: event selected ({context.SelectedEvent.Title})"),
+		ClickAnalyticsEvent.Click("Select Event Thumbnail", "Event Booking: click/select thumbnail event"));
+}
+
+async Task Step12_PostBookingFormAnalytics(Context context) {
+	// ---- Step 12: report the booking form fields. ----
+	await PostAnalyticsAsync("12. post booking form analytics",
+		ClickAnalyticsEvent.Click("Book Event Button Event Details", "Event Booking: book event button"),
+		ClickAnalyticsEvent.Click("firstName", "First Name"),
+		ClickAnalyticsEvent.Click("lastName", "Last Name"),
+		ClickAnalyticsEvent.Click("email", "Email"),
+		ClickAnalyticsEvent.Click("mobileNumber", "Phone number"),
+		ClickAnalyticsEvent.Click("groupSize", "Group Size"));
+}
+
+async Task Step14_PostBookingCompletionAnalytics(Context context) {
+	// ---- Step 14: report completion of the customer details form. ----
+	await PostAnalyticsAsync("14. post booking completion analytics",
+		ClickAnalyticsEvent.Click("Complete Button Customer Details", "Event Booking: customer details complete button"));
+}
+
 
 // Headers a Chrome browser adds to every request.
 void AddBrowserHeaders(HttpRequestMessage request) {
