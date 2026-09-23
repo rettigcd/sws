@@ -12,6 +12,13 @@
 //           with neither, the first event that has not passed is used.
 // Note:     --submit books with the dummy data and takes a real seat or ticket. Use it only when that is what you want.
 
+// ==== TODO ====
+// Create a User Preferences (seriesId, first, last, email, phone, show(event selector), group size, retry-strategy)
+// Log ALL HTTP Exchanges
+// Add the retry around the 1st step.
+// Add retry around other steps. - What retry?
+// Add Count-down timer.
+
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -22,26 +29,62 @@ var JsonOptions = new JsonSerializerOptions {
 	DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
 };
 
-var context = new Context();
-var config = new Config();
+UserConfig[] configs = [
+	new UserConfig {
+		// SeriesId = "UZJLSRJUNZC",	// ice cream
+		SeriesId = "B9KIOO7ZIQF",	// snl
+		Show = "pie",				// event selector
+		FirstName = "Test",
+		LastName = "User",
+		Email = "bob@thebuilder.com",
+		Phone = "513-555-1212",
+		GroupSize = 2
+	}
+];
 
-const string Usage = "Usage: dotnet run scripts/QudiniTickets.cs -- --site snl|icecream [--analytics] [--submit] [--list] [--title TEXT] [--event IDENTIFIER] [--group-size N] [--series ID]";
+var context = new Context();
+var runConfig = new RunConfig();
+Func<QudiniEvent, bool> available = e => !e.HasPassed && e.SlotsAvailable > 0;
+Func<QudiniEvent, bool> selector = available;
+
+const string Usage = "Usage: dotnet run scripts/QudiniTickets.cs -- --config INDEX|--site snl|icecream [--analytics] [--submit] [--list] [--title TEXT] [--event IDENTIFIER] [--group-size N] [--series ID]";
 for (int i = 0; i < args.Length; i++) {
 	switch (args[i]) {
+		
 		// series (ID) selection - selects: Ice Cream or SNL.
+		case "--config" when i + 1 < args.Length: {
+			if (!int.TryParse(args[++i], out int configIndex) || configIndex < 0 || configIndex >= configs.Length) {
+				Console.Error.WriteLine($"Unknown config index. Use a value from 0 to {configs.Length - 1}.");
+				Console.Error.WriteLine(Usage);
+				return 2;
+			}
+			context.InitializeFrom(configs[configIndex]);
+			selector = e => e.Title.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
+			break;
+		}
 		case "--site" when i + 1 < args.Length:{ 
 			string siteName = args[++i].ToLowerInvariant();
 			context.SeriesId = siteName switch { "snl" => "B9KIOO7ZIQF", "icecream" => "UZJLSRJUNZC", _ => "" };
 			break;
 		}
 		case "--series" when i + 1 < args.Length: context.SeriesId = args[++i]; break;
+
 		// event selection
-		case "--event" when i + 1 < args.Length: context.EventIdentifier = args[++i]; break;
-		case "--title" when i + 1 < args.Length: context.TitleText = args[++i]; break;
+		case "--event" when i + 1 < args.Length:{
+			string eventIdentifier = args[++i];
+			selector = e => e.Identifier == eventIdentifier;
+			break;
+		}
+		case "--title" when i + 1 < args.Length:{
+			string titleText = args[++i];
+			selector = e => e.Title.Contains(titleText, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
+			break;
+		}
+
 		// config options
-		case "--analytics": config.Analytics = true; break;
-		case "--submit": config.Submit = true; break;
-		case "--list": config.ListOnly = true; break;
+		case "--analytics": runConfig.Analytics = true; break;
+		case "--submit": runConfig.Submit = true; break;
+		case "--list": runConfig.ListOnly = true; break;
 		// user form info
 		case "--group-size" when i + 1 < args.Length: context.GroupSize = int.Parse(args[++i]); break;
 
@@ -70,7 +113,7 @@ context.Http = http;
 try {
 	await Step1_GetBookingPage(context);
 
-	if (config.Analytics)
+	if (runConfig.Analytics)
 		await Step3_RegisterWidgetSession(context);
 
 	await Step4_GetSeriesSettings(context);
@@ -78,33 +121,32 @@ try {
 	await Step7_GetEventsList(context);
 
 	// ---- Exit Ramp ----
-	if (config.ListOnly) {
+	if (runConfig.ListOnly) {
 		foreach (var e in context.Events)
 			Console.WriteLine($"   {e.Identifier,-12} {e.StartIso,-22} {e.SlotsAvailable,4} seats  max group {e.MaxGroupSize,2}  {e.Title}");
 		return 0;
 	}
 
 	// Select event.
-	context.SelectedEvent = context.Events
-		.Where(e => context.EventIdentifier is not null ? e.Identifier == context.EventIdentifier
-			: context.TitleText is not null ? e.Title.Contains(context.TitleText, StringComparison.OrdinalIgnoreCase) && !e.HasPassed
-			: !e.HasPassed)
-		.FirstOrDefault() ?? throw new InvalidOperationException("No matching event found. Use --list to see the events.");
+	context.SelectedEvent 
+		= context.Events.Where(selector).FirstOrDefault()	// the one we want
+		?? context.Events.Where(available).FirstOrDefault()	// fallback if desired one is unavailable
+		?? throw new InvalidOperationException("No matching event found. Use --list to see the events.");
 	Console.WriteLine($"   event {context.SelectedEvent.Identifier} (id {context.SelectedEvent.Id}) \"{context.SelectedEvent.Title}\" on {context.SelectedEvent.StartIso}, {context.SelectedEvent.SlotsAvailable} seats, max group {context.SelectedEvent.MaxGroupSize}");
 
-	if (config.Analytics)
+	if (runConfig.Analytics)
 		await Step8_PostFilterAnalytics(context);
 
 	await Step9_StartEventBookingSession(context);
 
-	if (config.Analytics)
+	if (runConfig.Analytics)
 		await Step10_PostEventAnalytics(context);
 
-	if (config.Analytics)
+	if (runConfig.Analytics)
 		await Step12_PostBookingFormAnalytics(context);
 
 	// ---- Exit Ramp ----
-	if (!config.Submit) {
+	if (!runConfig.Submit) {
 		Console.WriteLine("13. booking request (dry run, NOT sent; pass --submit to send):");
 		Console.WriteLine($"   POST {context.BaseUrl}/booking-widget/series/{context.SeriesId}/event/book");
 		Console.WriteLine($"   {context.GetBookingJson()}");
@@ -113,7 +155,7 @@ try {
 
 	await Step13_SubmitBooking(context);
 
-	if (config.Analytics)
+	if (runConfig.Analytics)
 		await Step14_PostBookingCompletionAnalytics(context);
 
 	return 0;
@@ -158,8 +200,14 @@ async Task Step7_GetEventsList(Context context) {
 	// - numeric id goes into the booking
 	// - short identifier goes into step 9.
 	// - Slots available limit group size
-	context.Events = JsonSerializer.Deserialize<List<QudiniEvent>>(await SendAsync("7. get events", JsonGet($"{context.BaseUrl}/booking-widget/event/events/{context.SeriesId}")), JsonOptions)
+	string eventsJson = await SendAsync("7. get events", JsonGet($"{context.BaseUrl}/booking-widget/event/events/{context.SeriesId}"));
+	List<QudiniEvent> events = JsonSerializer.Deserialize<List<QudiniEvent>>(
+		eventsJson,
+		JsonOptions)
 		?? throw new InvalidOperationException("Events response was empty.");
+	context.Events = events
+		.OrderBy(e => DateTimeOffset.Parse(e.StartIso))
+		.ToList();
 }
 
 async Task Step9_StartEventBookingSession(Context context) {
@@ -297,7 +345,18 @@ async Task SendOptionalAsync(string label, HttpRequestMessage request) {
 	Console.Error.WriteLine($"   optional step failed: {(int)response.StatusCode} {response.StatusCode}: {excerpt}");
 }
 
-public sealed class Config {
+public sealed class UserConfig {
+	public string SeriesId { get; set; } = "";
+	public string Show { get; set; } = ""; // event selector
+	public string FirstName { get; set; } = "";
+	public string LastName { get; set; } = "";
+	public string Email { get; set; } = "";
+	public string Phone { get; set; } = "";
+	public int GroupSize = 2;
+	// retry-strategy)
+}
+
+public sealed class RunConfig {
 	public bool Analytics { get; set; }
 	public bool Submit { get; set; }
 	public bool ListOnly { get; set; }
@@ -338,13 +397,13 @@ public sealed class Context {
 	// ------- config / options to select desired event ------
 	public string? EventIdentifier { get; set; }
 	public string? TitleText { get; set; }
+	public string Show { get; set; } = "";
 
 	// User Properties
 	public string FirstName { get; set; } = "Test";
 	public string LastName { get; set; } = "Dummy";
 	public string Email { get; set; } = "test.dummy@example.com";
 	public string MobileNumber { get; set; } = "+15135551212";
-
 	public int GroupSize { get; set; } = 1;
 
 	// ---- Series Details ----
@@ -361,6 +420,17 @@ public sealed class Context {
 	public QudiniEvent? SelectedEvent { get; set; }
 
 	public string? BookingReference { get; set; }
+
+	public void InitializeFrom(UserConfig config) {
+		Console.WriteLine($"Using config:\r\n\tseries: {config.SeriesId},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tphone: {config.Phone},\r\n\tgroup size: {config.GroupSize}\r\n");
+		SeriesId = config.SeriesId;
+		Show = config.Show;
+		FirstName = config.FirstName;
+		LastName = config.LastName;
+		Email = config.Email;
+		MobileNumber = config.Phone;
+		GroupSize = config.GroupSize;
+	}
 
 	// helper methods
 	public int GetGroupSizeToRequest() {
@@ -416,18 +486,32 @@ public sealed class SeriesSettings {
 public sealed class QudiniEvent {
 	[JsonPropertyName("id")]
 	public int Id { get; set; }
+
 	[JsonPropertyName("identifier")]
 	public string Identifier { get; set; } = "";
+
 	[JsonPropertyName("startISO")]
 	public string StartIso { get; set; } = "";
+
 	[JsonPropertyName("slotsAvailable")]
 	public int SlotsAvailable { get; set; }
+
 	[JsonPropertyName("maxGroupSize")]
 	public int MaxGroupSize { get; set; }
+
 	[JsonPropertyName("title")]
 	public string Title { get; set; } = "";
+
 	[JsonPropertyName("hasPassed")]
 	public bool HasPassed { get; set; }
+
+	// Other SNL Properties not used:
+	// startDate   (human friendly string)
+	// startTime   (human friendly string)
+	// durationMinutes (int)
+	// shop (storeName, address1, address2, locality, region, postalcode, timeZone, latitude, longitude, googleMapLink)
+	// seriesId  (int)
+	// locationName  (null)
 }
 
 public sealed class EventBookingSessionRequest {
