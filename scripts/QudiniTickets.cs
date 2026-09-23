@@ -92,13 +92,6 @@ try {
 		.FirstOrDefault() ?? throw new InvalidOperationException("No matching event found. Use --list to see the events.");
 	Console.WriteLine($"   event {context.SelectedEvent.Identifier} (id {context.SelectedEvent.Id}) \"{context.SelectedEvent.Title}\" on {context.SelectedEvent.StartIso}, {context.SelectedEvent.SlotsAvailable} seats, max group {context.SelectedEvent.MaxGroupSize}");
 
-	// Check group size
-	int effectiveMaxGroupSize = Math.Min(context.SelectedEvent.SlotsAvailable, context.SelectedEvent.MaxGroupSize);
-	if (effectiveMaxGroupSize < context.GroupSize ){
-		Console.WriteLine($"   WARNING: group size {context.GroupSize} reduced to fit (seats {context.SelectedEvent.SlotsAvailable}, max group {context.SelectedEvent.MaxGroupSize}); the booking will likely be refused.");
-		context.GroupSize = effectiveMaxGroupSize;
-	}
-
 	if (config.Analytics)
 		await Step8_PostFilterAnalytics(context);
 
@@ -370,6 +363,15 @@ public sealed class Context {
 	public string? BookingReference { get; set; }
 
 	// helper methods
+	public int GetGroupSizeToRequest() {
+		QudiniEvent selectedEvent = SelectedEvent
+			?? throw new InvalidOperationException("No event has been selected.");
+		int effectiveMaxGroupSize = Math.Min(selectedEvent.SlotsAvailable, selectedEvent.MaxGroupSize);
+		if (effectiveMaxGroupSize < GroupSize)
+			Console.WriteLine($"   WARNING: group size {GroupSize} reduced to fit (seats {selectedEvent.SlotsAvailable}, max group {selectedEvent.MaxGroupSize}); the booking will likely be refused.");
+
+		return Math.Min(GroupSize, effectiveMaxGroupSize);
+	}
 
 	public string GetBookingJson() {
 		BookingRequest bookingRequest = new BookingRequest {
@@ -377,7 +379,7 @@ public sealed class Context {
 			LastName = LastName,
 			Email = Email,
 			MobileNumber = SeriesSettings?.PhoneIsVisible == true ? MobileNumber : null,
-			GroupSize = GroupSize,
+			GroupSize = GetGroupSizeToRequest(),
 			EventId = SelectedEvent?.Id ?? throw new InvalidOperationException("No event has been selected."),
 			Timezone = Timezone,
 			Attribution = SeriesSettings?.DefaultAttributionQuestion
