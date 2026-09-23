@@ -68,19 +68,7 @@ using var http = new HttpClient(handler);
 context.Http = http;
 
 try {
-	// ---- Step 1: open the booking page. ----
-	// The response sets the cookies: (UserId,SessionId) that identify us (kept by the cookie jar).
-	// This is the step that hangs and gives gateway failures.
-	var index = new HttpRequestMessage(HttpMethod.Get, context.IndexUrl);
-	AddBrowserHeaders(index);
-	index.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
-	index.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
-	index.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
-	index.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
-	index.Headers.TryAddWithoutValidation("Sec-Fetch-User", "?1");
-	index.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
-	await SendAsync("1. open booking page", index);
-	Console.WriteLine($"   user id {context.UserId}, session id {context.SessionId}");
+	await Step1_GetBookingPage(context);
 
 	if (config.Analytics) {
 		// ---- Step 3: register the widget session. ----
@@ -196,6 +184,26 @@ try {
 catch (Exception ex) {
 	Console.Error.WriteLine($"FAILED: {ex.Message}");
 	return 1;
+}
+
+// ==========================
+// ========== Steps =========
+// ==========================
+
+async Task Step1_GetBookingPage(Context context) {
+	// ---- Step 1: open the booking page. ----
+	// The response sets the cookies: (UserId,SessionId) that identify us (kept by the cookie jar).
+	// This is the step that hangs and gives gateway failures.
+	var index = new HttpRequestMessage(HttpMethod.Get, context.IndexUrl);
+	AddBrowserHeaders(index);
+	index.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+	index.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
+	index.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
+	index.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
+	index.Headers.TryAddWithoutValidation("Sec-Fetch-User", "?1");
+	index.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
+	await SendAsync("1. open booking page", index);
+	Console.WriteLine($"   user id {context.UserId}, session id {context.SessionId}");
 }
 
 // Headers a Chrome browser adds to every request.
