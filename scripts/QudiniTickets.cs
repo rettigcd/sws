@@ -3,7 +3,7 @@
 // the five steps that are needed (steps 1, 4, 7, 9 and 13 in docs/SNL_TICKET_FLOW_SPEC.md, section 5).
 // It sends dummy attendee data.
 //
-// Run:      dotnet run scripts/QudiniTickets.cs -- --site snl|icecream [--submit] [--list] [--title TEXT]
+// Run:      dotnet run scripts/QudiniTickets.cs -- --site snl|icecream [--analytics] [--submit] [--list] [--title TEXT]
 //                                                   [--event IDENTIFIER] [--group-size N] [--series ID]
 // Default:  a dry run. Steps 1, 4, 7 and 9 are sent (they only read data and register a page-view session),
 //           then the booking request is printed but NOT sent. Add --submit to send it.
@@ -25,7 +25,7 @@ var JsonOptions = new JsonSerializerOptions {
 var context = new Context();
 var config = new Config();
 
-const string Usage = "Usage: dotnet run scripts/QudiniTickets.cs -- --site snl|icecream [--submit] [--list] [--title TEXT] [--event IDENTIFIER] [--group-size N] [--series ID]";
+const string Usage = "Usage: dotnet run scripts/QudiniTickets.cs -- --site snl|icecream [--analytics] [--submit] [--list] [--title TEXT] [--event IDENTIFIER] [--group-size N] [--series ID]";
 for (int i = 0; i < args.Length; i++) {
 	switch (args[i]) {
 		// series (ID) selection - selects: Ice Cream or SNL.
@@ -39,6 +39,7 @@ for (int i = 0; i < args.Length; i++) {
 		case "--event" when i + 1 < args.Length: context.EventIdentifier = args[++i]; break;
 		case "--title" when i + 1 < args.Length: context.TitleText = args[++i]; break;
 		// config options
+		case "--analytics": config.Analytics = true; break;
 		case "--submit": config.Submit = true; break;
 		case "--list": config.ListOnly = true; break;
 		// user form info
@@ -72,7 +73,7 @@ try {
 	// This is the step that hangs and gives gateway failures.
 	var index = new HttpRequestMessage(HttpMethod.Get, context.IndexUrl);
 	AddBrowserHeaders(index);
-	index.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+	index.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
 	index.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
 	index.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
 	index.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
@@ -80,6 +81,20 @@ try {
 	index.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
 	await SendAsync("1. open booking page", index);
 	Console.WriteLine($"   user id {context.UserId}, session id {context.SessionId}");
+
+	if (config.Analytics) {
+		// ---- Step 3: register the widget session. ----
+		await SendOptionalAsync("3. register widget session", JsonPost(
+			$"{context.BaseUrl}/event-series/{context.SeriesId}/session",
+			JsonSerializer.Serialize(new WidgetSessionRegistrationRequest {
+				UserId = context.UserId,
+				Sessions = [new EventBookingSessionRequest {
+					SessionId = context.SessionId,
+					BrowserVersion = $"{context.ChromeVersion}.0.0.0",
+					Referrer = context.IndexUrl,
+				}],
+			}, JsonOptions)));
+	}
 
 	// ---- Step 4: series settings. ----
 	// Gets the series settings.
@@ -118,6 +133,14 @@ try {
 		context.GroupSize = effectiveMaxGroupSize;
 	}
 
+	if (config.Analytics) {
+		// ---- Step 8: report the selected date, topics, and store filters. ----
+		await PostAnalyticsAsync("8. post filter analytics",
+			ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
+			ClickAnalyticsEvent.Null("Select Topics", "Event Booking topics"),
+			ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"));
+	}
+
 	// ---- Step 9: create the event booking session (tells Qudini which event this visitor is looking at). ----
 	EventBookingSessionRequest sessionRequest = new EventBookingSessionRequest {
 		SessionId = context.SessionId,
@@ -125,10 +148,29 @@ try {
 		BrowserVersion = $"{context.ChromeVersion}.0.0.0",
 		Referrer = context.IndexUrl,
 	};
-	await SendAsync("9. create event booking session", 
+	await SendOptionalAsync("9. create event booking session", 
 		JsonPost($"{context.BaseUrl}/event-series/{context.SeriesId}/events/{context.SelectedEvent.Identifier}/session", 
 		JsonSerializer.Serialize(sessionRequest, JsonOptions))
 	);
+
+	if (config.Analytics) {
+		// ---- Step 10: report the selected event. ----
+		await PostAnalyticsAsync("10. post event analytics",
+			ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
+			ClickAnalyticsEvent.Null("Select Topics", "Event Booking topics"),
+			ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"),
+			ClickAnalyticsEvent.Click("Select Item Event Thumbnail", $"Event Booking: event selected ({context.SelectedEvent.Title})"),
+			ClickAnalyticsEvent.Click("Select Event Thumbnail", "Event Booking: click/select thumbnail event"));
+
+		// ---- Step 12: report the booking form fields. ----
+		await PostAnalyticsAsync("12. post booking form analytics",
+			ClickAnalyticsEvent.Click("Book Event Button Event Details", "Event Booking: book event button"),
+			ClickAnalyticsEvent.Click("firstName", "First Name"),
+			ClickAnalyticsEvent.Click("lastName", "Last Name"),
+			ClickAnalyticsEvent.Click("email", "Email"),
+			ClickAnalyticsEvent.Click("mobileNumber", "Phone number"),
+			ClickAnalyticsEvent.Click("groupSize", "Group Size"));
+	}
 
 	// ---- Exit Ramp ----
 	if (!config.Submit) {
@@ -142,6 +184,13 @@ try {
 	var bookingResponse = JsonSerializer.Deserialize<BookingResponse>(await SendAsync("13. submit booking", JsonPost($"{context.BaseUrl}/booking-widget/series/{context.SeriesId}/event/book", context.GetBookingJson())), JsonOptions);
 	context.BookingReference = bookingResponse?.ReferenceNumber;
 	Console.WriteLine($"   booked. Reference number: {context.BookingReference ?? "(none in response)"}");
+
+	if (config.Analytics) {
+		// ---- Step 14: report completion of the customer details form. ----
+		await PostAnalyticsAsync("14. post booking completion analytics",
+			ClickAnalyticsEvent.Click("Complete Button Customer Details", "Event Booking: customer details complete button"));
+	}
+
 	return 0;
 }
 catch (Exception ex) {
@@ -192,11 +241,45 @@ async Task<string> SendAsync(string label, HttpRequestMessage request) {
 	throw new InvalidOperationException($"{label} returned {(int)response.StatusCode} {response.StatusCode}{hint}: {excerpt}");
 }
 
+async Task PostAnalyticsAsync(string label, params ClickAnalyticsEvent[] events) {
+	await SendOptionalAsync(label,
+		JsonPost($"{context.BaseUrl}/event-series/{context.SeriesId}/session/{context.SessionId}/events",
+			JsonSerializer.Serialize(events, JsonOptions)));
+}
+
+async Task SendOptionalAsync(string label, HttpRequestMessage request) {
+	using var response = await http.SendAsync(request);
+	string body = await response.Content.ReadAsStringAsync();
+	Console.WriteLine($"{label}: {request.Method} {request.RequestUri!.AbsolutePath} -> {(int)response.StatusCode}");
+	if (response.IsSuccessStatusCode)
+		return;
+
+	string excerpt = body.Length > 300 ? body[..300] + "..." : body;
+	Console.Error.WriteLine($"   optional step failed: {(int)response.StatusCode} {response.StatusCode}: {excerpt}");
+}
+
 public sealed class Config {
+	public bool Analytics { get; set; }
 	public bool Submit { get; set; }
 	public bool ListOnly { get; set; }
 
 }
+
+public sealed class WidgetSessionRegistrationRequest {
+	[JsonPropertyName("userID")]
+	public string? UserId { get; set; }
+	public List<EventBookingSessionRequest> Sessions { get; set; } = [];
+}
+
+public sealed record ClickAnalyticsEvent(string action, ClickAnalyticsEventProperties properties) {
+	public static ClickAnalyticsEvent Null(string action, string label) => new(action, new(label + ": undefined", null));
+	public static ClickAnalyticsEvent Click(string action, string label) => new(action, new(label, "click"));
+}
+
+public sealed record ClickAnalyticsEventProperties(
+	string label,
+	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? eventType,
+	string category = "Event");
 
 public sealed class Context {
 	// Known Constants
