@@ -2,7 +2,7 @@
 
 ## Context
 
-`docs/AUTH_FLOW_AUTOMATER_SPEC.md` describes the "replay engine" (component 2) that was explicitly deferred when we built the OIDC/OAuth2/B2C detector (`app/Auth/AuthFlowDetector.cs`, component 1). It consumes a `Auth.DetectedAuthenticationFlow` and actually executes the flow against a real or mocked HTTP endpoint to obtain live tokens/cookies — protocol-aware, not byte-for-byte replay of captured `.saz` sessions (that's the unrelated `RequestPlan`/`RequestPlanReplayer` machinery, not reused here).
+`docs/AUTH_FLOW_AUTOMATER_SPEC.md` describes the "replay engine" (component 2) that was explicitly deferred when we built the OIDC/OAuth2/B2C detector (`app/Auth/AuthFlowDetector.cs`, component 1). It consumes a `Auth.DetectedAuthenticationFlow` and actually executes the flow against a real or mocked HTTP endpoint to obtain live tokens/cookies — protocol-aware, not byte-for-byte replay of captured `.saz` exchanges (that's the unrelated `RequestPlan`/`RequestPlanReplayer` machinery, not reused here).
 
 Decisions confirmed with the user:
 - **v1 grant scope**: only `AuthorizationCode` / `AuthorizationCodeWithPkce` (+ optional login-form step) and `RefreshToken`. Every other `Auth.AuthFlowType` returns a structured `UnsupportedFlowReason` immediately, with zero HTTP calls — no partial execution, no throw.
@@ -26,7 +26,7 @@ New folder `app/Automation/`, namespace `Automation`, all `internal` (tests proj
 | `IAuthHttpClient.cs` | Mockable HTTP abstraction (interface, using `HttpRequestMessage`/`HttpResponseMessage` directly) + `SystemNetAuthHttpClient` production impl (`AllowAutoRedirect=false`, engine owns redirects) |
 | `OAuthCryptoHelpers.cs` | `GenerateState`, `GenerateNonce`, `GenerateCodeVerifier`, `DeriveCodeChallengeS256`, `Base64UrlEncode` |
 | `JwtDecoder.cs` | Unsigned, no-verification JWT payload → claims decoding |
-| `EndpointResolver.cs` | Resolves literal authorize/token endpoint URLs: `Discovery` → `B2cDetails` → captured `Session` lookup by ID → null |
+| `EndpointResolver.cs` | Resolves literal authorize/token endpoint URLs: `Discovery` → `B2cDetails` → captured `Exchange` lookup by ID → null |
 | `VariableProvenance.cs` | `VariableProvenance` enum + `ResolvedVariable` record |
 | `UnsupportedFlowReason.cs` | `UnsupportedFlowReasonKind` enum + `UnsupportedFlowReason` record |
 | `AutomationOptions.cs` | Caller-override options record |
@@ -45,7 +45,7 @@ Tests (flat, matching existing convention):
 | `tests/FakeAuthHttpClient.cs` | Scripted `IAuthHttpClient` — FIFO queue of `(match, responseBuilder)`, builder receives the actual request so it can echo generated values (state) and recompute PKCE `code_challenge` from the posted `code_verifier` |
 | `tests/OAuthCryptoHelpers_Tests.cs` | PKCE/state/nonce generator tests |
 | `tests/JwtDecoder_Tests.cs` | JWT decode tests (known claims incl. array claim; non-JWT input returns `[]`) |
-| `tests/EndpointResolver_Tests.cs` | Discovery / B2C-details / session-fallback / unresolvable cases |
+| `tests/EndpointResolver_Tests.cs` | Discovery / B2C-details / exchange-fallback / unresolvable cases |
 | `tests/LoginPageParser_Tests.cs` | HTML fixtures: hidden-field extraction, relative-action resolution, field-name resolution, MFA/CAPTCHA/WebAuthn/JS-shell detection |
 | `tests/AuthFlowAutomationEngine_AuthorizationCodePkce_Tests.cs` | Full scripted B2C AuthCode+PKCE scenarios (see below) |
 | `tests/AuthFlowAutomationEngine_RefreshToken_Tests.cs` | Refresh-token scenarios |
@@ -88,16 +88,16 @@ internal sealed record AutomationResult(
 );
 ```
 
-Entry point (needs raw `Session`s too, since `DetectedAuthenticationFlow` only carries session IDs and `Discovery` may be null):
+Entry point (needs raw `Exchange`s too, since `DetectedAuthenticationFlow` only carries exchange IDs and `Discovery` may be null):
 
 ```csharp
 internal static class AuthFlowAutomationEngine {
-    public static Task<AutomationResult> ExecuteAsync(Auth.DetectedAuthenticationFlow flow, IReadOnlyList<Session> sessions, AutomationOptions? options = null, CancellationToken cancellationToken = default);
+    public static Task<AutomationResult> ExecuteAsync(Auth.DetectedAuthenticationFlow flow, IReadOnlyList<Exchange> exchanges, AutomationOptions? options = null, CancellationToken cancellationToken = default);
     public static Task<AutomationResult> RefreshAccessTokenAsync(string tokenEndpoint, string clientId, string? clientSecret, string refreshToken, AutomationOptions? options = null, CancellationToken cancellationToken = default);
 }
 ```
 
-`EndpointResolver.Resolve(flow, sessions)`: `flow.Discovery` endpoints → else `flow.B2cDetails` endpoints → else look up `sessions.FirstOrDefault(s => s.SessionId == flow.AuthorizationRequestSessionId/TokenRequestSessionId)` and strip the query string from `session.Request.Url` → else `null` (handler returns `MissingRequiredEndpoint`, not a throw).
+`EndpointResolver.Resolve(flow, exchanges)`: `flow.Discovery` endpoints → else `flow.B2cDetails` endpoints → else look up `exchanges.FirstOrDefault(s => s.ExchangeId == flow.AuthorizationRequestExchangeId/TokenRequestExchangeId)` and strip the query string from `exchange.Request.Url` → else `null` (handler returns `MissingRequiredEndpoint`, not a throw).
 
 ## Algorithm: AuthorizationCode / AuthorizationCodeWithPkce
 
@@ -115,7 +115,7 @@ internal static class AuthFlowAutomationEngine {
 
 ## Algorithm: RefreshToken
 
-Single `POST grant_type=refresh_token` (+ scope if requested) to the resolved token endpoint using `options.RefreshTokenOverride ?? flow.Variables["refresh_token"]` (marked `Discovered` + staleness note) and resolved client id/secret. Same response parsing as step 6 above. `RefreshAccessTokenAsync` is the same logic taking endpoint/client info directly (for reuse after an earlier `ExecuteAsync` call, without needing the flow/sessions again).
+Single `POST grant_type=refresh_token` (+ scope if requested) to the resolved token endpoint using `options.RefreshTokenOverride ?? flow.Variables["refresh_token"]` (marked `Discovered` + staleness note) and resolved client id/secret. Same response parsing as step 6 above. `RefreshAccessTokenAsync` is the same logic taking endpoint/client info directly (for reuse after an earlier `ExecuteAsync` call, without needing the flow/exchanges again).
 
 **Dispatcher**: `switch (flow.FlowType)` → AuthorizationCode/WithPkce → handler; RefreshToken → handler; anything else → immediate `UnsupportedFlowReason.UnsupportedFlowType`, zero HTTP calls.
 
@@ -125,7 +125,7 @@ Single `POST grant_type=refresh_token` (+ scope if requested) to the resolved to
 
 ## Test strategy highlights
 
-Build the *original* capture via `TestSessionBuilder` (same shape as `AuthFlowDetector_Tests.Detect_IncludesUsernamePasswordCredentials_WhenPresentInAuthCallbackRequest`), run it through the **real** `Auth.AuthFlowDetector.Detect(sessions)` to get a genuine flow — don't hand-construct `DetectedAuthenticationFlow`. Key scenarios: happy-path login-form flow with PKCE cross-check (token-endpoint responder recomputes SHA-256+Base64Url from the posted `code_verifier` and asserts it equals the `code_challenge` captured on the first request), SSO-cookie-sufficient path (no login form), SSO-expected-but-missing-this-run (`MissingCredentials`), rejected credentials (real failure), runtime MFA/CAPTCHA detection, refresh-token flow, and unsupported-flow-type theory test asserting zero HTTP calls. A review note (not an automated test): confirm `SystemNetAuthHttpClient` is never referenced anywhere under `tests/` — that absence is the safety mechanism.
+Build the *original* capture via `TestExchangeBuilder` (same shape as `AuthFlowDetector_Tests.Detect_IncludesUsernamePasswordCredentials_WhenPresentInAuthCallbackRequest`), run it through the **real** `Auth.AuthFlowDetector.Detect(exchanges)` to get a genuine flow — don't hand-construct `DetectedAuthenticationFlow`. Key scenarios: happy-path login-form flow with PKCE cross-check (token-endpoint responder recomputes SHA-256+Base64Url from the posted `code_verifier` and asserts it equals the `code_challenge` captured on the first request), SSO-cookie-sufficient path (no login form), SSO-expected-but-missing-this-run (`MissingCredentials`), rejected credentials (real failure), runtime MFA/CAPTCHA detection, refresh-token flow, and unsupported-flow-type theory test asserting zero HTTP calls. A review note (not an automated test): confirm `SystemNetAuthHttpClient` is never referenced anywhere under `tests/` — that absence is the safety mechanism.
 
 ## Implementation order
 

@@ -19,5 +19,5 @@ internal enum FlowWarningKind {
 internal sealed record FlowWarning(
 	FlowWarningKind Kind,
 	string Message,
-	IReadOnlyList<int> RelatedSessionIds
+	IReadOnlyList<int> RelatedExchangeIds
 );

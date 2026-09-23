@@ -1,5 +1,6 @@
+namespace Saz;
+
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 internal sealed record Request(
 	string OriginalStartLine,
@@ -12,11 +13,7 @@ internal sealed record Request(
 	string? Fragment,
 	Dictionary<string, string> Headers,
 	Dictionary<string, string> Cookies,
-	List<string> DynamicHeaders,
 	Body Body,
 	JsonElement? JsonBody,
-	List<FormBodyEntry>? FormBody,
-	List<string> RegenerationSteps,
-	// Classification
-	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] Auth.RequestType RequestType = Auth.RequestType.Unknown
+	List<FormBodyEntry>? FormBody
 );

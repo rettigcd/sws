@@ -1,3 +1,5 @@
+namespace Analysis;
+
 internal static class ChromeHeadersEngine {
 	static readonly string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 	static readonly string DefaultSecChUa = "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"";

@@ -1,3 +1,7 @@
+namespace Analysis;
+
+using Saz;
+
 internal static class RequestPlanReplayer {
 	public static async Task<List<HttpResponseMessage>> ExecuteSequentially(
 		IReadOnlyList<RequestPlan> plans,
@@ -26,16 +30,16 @@ internal static class RequestPlanReplayer {
 		}
 	}
 
-	public static Task<List<HttpResponseMessage>> ExecuteSessionsSequentially(
-		IReadOnlyList<Session> sessions,
+	public static Task<List<HttpResponseMessage>> ExecuteExchangesSequentially(
+		IReadOnlyList<Exchange> exchanges,
 		RequestExecutionContext? context = null,
 		bool seedCapturedCookies = true,
 		CancellationToken cancellationToken = default
 	) {
-		ArgumentNullException.ThrowIfNull(sessions);
+		ArgumentNullException.ThrowIfNull(exchanges);
 
-		var plans = sessions
-			.Select(session => new RequestPlan(session.Request))
+		var plans = exchanges
+			.Select(exchange => new RequestPlan(exchange.Request))
 			.ToList();
 
 		return ExecuteSequentially(plans, context, seedCapturedCookies, cancellationToken);

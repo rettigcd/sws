@@ -1,3 +1,4 @@
+using Saz;
 using System.Net;
 
 namespace Automation;
@@ -9,7 +10,7 @@ internal static class AuthorizationCodeFlowHandler {
 
 	public static async Task<AutomationResult> ExecuteAsync(
 		Auth.DetectedAuthenticationFlow flow,
-		IReadOnlyList<Session> sessions,
+		IReadOnlyList<Exchange> exchanges,
 		AutomationOptions options,
 		IAuthHttpClient httpClient,
 		CancellationToken cancellationToken
@@ -17,10 +18,10 @@ internal static class AuthorizationCodeFlowHandler {
 		var stepLog = new AutomationStepLog();
 		var variables = new List<ResolvedVariable>();
 
-		var endpoints = EndpointResolver.Resolve(flow, sessions);
+		var endpoints = EndpointResolver.Resolve(flow, exchanges);
 		if (string.IsNullOrWhiteSpace(endpoints.AuthorizationEndpoint) || string.IsNullOrWhiteSpace(endpoints.TokenEndpoint)) {
 			stepLog.Record("Unable to resolve authorization/token endpoints for this flow.", success: false);
-			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingRequiredEndpoint, "Could not resolve authorization/token endpoints from discovery, B2C details, or captured sessions."));
+			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingRequiredEndpoint, "Could not resolve authorization/token endpoints from discovery, B2C details, or captured exchanges."));
 		}
 
 		if (string.IsNullOrWhiteSpace(flow.ClientId))

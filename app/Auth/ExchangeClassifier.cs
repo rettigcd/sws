@@ -1,95 +1,72 @@
 namespace Auth;
 
+using Saz;
+
 /// <summary>
-/// Classifies individual sessions as OIDC/OAuth2-related request/response types.
+/// Classifies individual exchanges as OIDC/OAuth2-related request/response types.
 /// Generic across providers; Azure B2C specifics are layered on separately by AzureB2c.B2cEnricher.
 /// </summary>
-internal static class SessionClassifier {
+internal static class ExchangeClassifier {
 
 	/// <summary>
-	/// Classifies only requests/responses that are currently Unknown and preserves existing classifications.
+	/// Classifies every exchange's request and response. Each exchange is classified with
+	/// the exchanges before it as context (e.g. to find the relevant discovery document).
 	/// </summary>
-	public static IReadOnlyList<Session> ClassifyUnknownSessions(IReadOnlyList<Session> sessions) {
-		if (sessions.Count == 0)
-			return sessions;
+	public static IReadOnlyList<ClassifiedExchange> Classify(IReadOnlyList<Exchange> exchanges) {
+		var classified = new List<ClassifiedExchange>(exchanges.Count);
+		var priorExchanges = new List<Exchange>(exchanges.Count);
 
-		var classifiedSessions = new List<Session>(sessions.Count);
-		var priorSessions = new List<Session>(sessions.Count);
-
-		foreach (var session in sessions) {
-			var processedSession = session;
-
-			if (session.Request.RequestType == RequestType.Unknown) {
-				var classifiedRequestType = ClassifyRequest(session, priorSessions);
-				if (classifiedRequestType != RequestType.Unknown) {
-					processedSession = processedSession with { Request = processedSession.Request with { RequestType = classifiedRequestType } };
-				}
-			}
-
-			if (processedSession.Response.ResponseClassification == ResponseType.Unknown) {
-				var classifiedResponseType = ClassifyResponse(processedSession, priorSessions);
-				if (classifiedResponseType != ResponseType.Unknown) {
-					processedSession = processedSession with { Response = processedSession.Response with { ResponseClassification = classifiedResponseType } };
-				}
-			}
-
-			classifiedSessions.Add(processedSession);
-			priorSessions.Add(processedSession);
+		foreach (var exchange in exchanges) {
+			classified.Add(new ClassifiedExchange(
+				exchange,
+				ClassifyRequest(exchange, priorExchanges),
+				ClassifyResponse(exchange, priorExchanges)
+			));
+			priorExchanges.Add(exchange);
 		}
 
-		return classifiedSessions;
+		return classified;
 	}
 
-	/// <summary>
-	/// Classifies a session into a high-level OIDC/OAuth2 request type, without reclassifying
-	/// a session that already has a known type.
-	/// </summary>
-	public static RequestType ClassifySession(Session session, IReadOnlyList<Session>? priorSessions = null) {
-		if (session.Request.RequestType != RequestType.Unknown)
-			return session.Request.RequestType;
-
-		return ClassifyRequest(session, priorSessions ?? []);
-	}
-
-	static bool IsDeviceAuthorizationRequest(Session session, OidcDiscoveryDocument? discovery) {
+	static bool IsDeviceAuthorizationRequest(Exchange exchange, OidcDiscoveryDocument? discovery) {
 		// Path/discovery-based only: the initial device authorization request has no grant_type,
 		// so matching on a "device_code"-ish grant_type would also catch device-code token polls
 		// (grant_type=urn:ietf:params:oauth:grant-type:device_code) at the token endpoint.
-		return EndpointClassifier.IsDeviceAuthorizationEndpoint(session.Request.Url, discovery);
+		return EndpointClassifier.IsDeviceAuthorizationEndpoint(exchange.Request.Url, discovery);
 	}
 
-	static bool IsAuthorizationCallbackRequest(Session session, IReadOnlyList<Session> priorSessions, OidcDiscoveryDocument? discovery) {
-		if (EndpointClassifier.IsAuthorizeRequest(session.Request.Url, discovery) || EndpointClassifier.IsTokenRequest(session.Request.Url, discovery))
+	static bool IsAuthorizationCallbackRequest(Exchange exchange, IReadOnlyList<Exchange> priorExchanges, OidcDiscoveryDocument? discovery) {
+		if (EndpointClassifier.IsAuthorizeRequest(exchange.Request.Url, discovery) || EndpointClassifier.IsTokenRequest(exchange.Request.Url, discovery))
 			return false;
 
-		bool hasCode = session.Request.QueryParameters.ContainsKey("code");
-		bool hasState = session.Request.QueryParameters.ContainsKey("state")
-			|| session.Request.QueryParameters.ContainsKey("session_state");
+		bool hasCode = exchange.Request.QueryParameters.ContainsKey("code");
+		bool hasState = exchange.Request.QueryParameters.ContainsKey("state")
+			|| exchange.Request.QueryParameters.ContainsKey("session_state");
 
 		if (hasCode && hasState)
 			return true;
 
-		if (OAuthParameterHelpers.TryParseFragmentParameters(session.Request.Fragment, out var callbackFragmentParameters)
+		if (OAuthParameterHelpers.TryParseFragmentParameters(exchange.Request.Fragment, out var callbackFragmentParameters)
 			&& OAuthParameterHelpers.HasCodeAndState(callbackFragmentParameters)) {
 			return true;
 		}
 
-		foreach (var priorSession in priorSessions.Reverse()) {
-			if (!OAuthParameterHelpers.IsOauth2AuthorizationRequest(priorSession.Request))
+		foreach (var priorExchange in priorExchanges.Reverse()) {
+			if (!OAuthParameterHelpers.IsOauth2AuthorizationRequest(priorExchange.Request))
 				continue;
 
-			if (!OAuthParameterHelpers.TryGetRequestParameter(priorSession.Request, "redirect_uri", out string redirectUri))
+			if (!OAuthParameterHelpers.TryGetRequestParameter(priorExchange.Request, "redirect_uri", out string redirectUri))
 				continue;
 
-			if (!OAuthParameterHelpers.UrlsMatchIgnoringFragment(redirectUri, session.Request.Url))
+			if (!OAuthParameterHelpers.UrlsMatchIgnoringFragment(redirectUri, exchange.Request.Url))
 				continue;
 
-			if (!OAuthParameterHelpers.TryGetRequestParameter(priorSession.Request, "response_mode", out string responseMode)
+			if (!OAuthParameterHelpers.TryGetRequestParameter(priorExchange.Request, "response_mode", out string responseMode)
 				|| !responseMode.Equals("fragment", StringComparison.OrdinalIgnoreCase)) {
 				continue;
 			}
 
-			if (OAuthParameterHelpers.TryParseFragmentFromLocation(priorSession.Response, session.Request.Url, out var locationFragmentParameters)
+			if (OAuthParameterHelpers.TryParseFragmentFromLocation(priorExchange.Response, exchange.Request.Url, out var locationFragmentParameters)
 				&& OAuthParameterHelpers.HasCodeAndState(locationFragmentParameters)) {
 				return true;
 			}
@@ -98,56 +75,56 @@ internal static class SessionClassifier {
 		return false;
 	}
 
-	static bool IsTokenRequestWithGrantType(Session session, OidcDiscoveryDocument? discovery, string grantType) {
-		if (!EndpointClassifier.IsTokenRequest(session.Request.Url, discovery))
+	static bool IsTokenRequestWithGrantType(Exchange exchange, OidcDiscoveryDocument? discovery, string grantType) {
+		if (!EndpointClassifier.IsTokenRequest(exchange.Request.Url, discovery))
 			return false;
 
-		if (!OAuthParameterHelpers.TryGetRequestParameter(session.Request, "grant_type", out string actualGrantType))
+		if (!OAuthParameterHelpers.TryGetRequestParameter(exchange.Request, "grant_type", out string actualGrantType))
 			return false;
 
 		return actualGrantType.Equals(grantType, StringComparison.OrdinalIgnoreCase);
 	}
 
-	static RequestType ClassifyRequest(Session session, IReadOnlyList<Session> priorSessions) {
-		var discovery = EndpointClassifier.FindRelevantDiscovery(session, priorSessions);
+	public static RequestType ClassifyRequest(Exchange exchange, IReadOnlyList<Exchange> priorExchanges) {
+		var discovery = EndpointClassifier.FindRelevantDiscovery(exchange, priorExchanges);
 
-		if (EndpointClassifier.IsOpenIdConfiguration(session.Request.Url))
+		if (EndpointClassifier.IsOpenIdConfiguration(exchange.Request.Url))
 			return RequestType.Configuration;
 
-		if (IsDeviceAuthorizationRequest(session, discovery))
+		if (IsDeviceAuthorizationRequest(exchange, discovery))
 			return RequestType.AuthorizationRequest_DeviceAuthorization;
 
-		if (EndpointClassifier.IsEndSessionEndpoint(session.Request.Url, discovery))
+		if (EndpointClassifier.IsEndSessionEndpoint(exchange.Request.Url, discovery))
 			return RequestType.EndSessionRequest;
 
-		if (IsTokenRequestWithGrantType(session, discovery, "refresh_token"))
+		if (IsTokenRequestWithGrantType(exchange, discovery, "refresh_token"))
 			return RequestType.RefreshTokenRequest;
 
-		if (IsTokenRequestWithGrantType(session, discovery, "authorization_code")
-			&& OAuthParameterHelpers.TryGetRequestParameter(session.Request, "code", out _))
+		if (IsTokenRequestWithGrantType(exchange, discovery, "authorization_code")
+			&& OAuthParameterHelpers.TryGetRequestParameter(exchange.Request, "code", out _))
 			return RequestType.AuthorizationCodeTokenRequest;
 
-		if (IsTokenRequestWithGrantType(session, discovery, "client_credentials"))
+		if (IsTokenRequestWithGrantType(exchange, discovery, "client_credentials"))
 			return RequestType.ClientCredentialsTokenRequest;
 
-		if (IsTokenRequestWithGrantType(session, discovery, "password"))
+		if (IsTokenRequestWithGrantType(exchange, discovery, "password"))
 			return RequestType.PasswordTokenRequest;
 
-		if (IsTokenRequestWithGrantType(session, discovery, "urn:ietf:params:oauth:grant-type:device_code"))
+		if (IsTokenRequestWithGrantType(exchange, discovery, "urn:ietf:params:oauth:grant-type:device_code"))
 			return RequestType.DeviceCodeTokenRequest;
 
-		if (IsAuthorizationCallbackRequest(session, priorSessions, discovery))
+		if (IsAuthorizationCallbackRequest(exchange, priorExchanges, discovery))
 			return RequestType.AuthorizationCallbackRequest;
 
-		if (OAuthParameterHelpers.IsOauth2AuthorizationRequest(session.Request)) {
-			if (!session.Request.QueryParameters.TryGetValue("response_type", out string? responseType)
+		if (OAuthParameterHelpers.IsOauth2AuthorizationRequest(exchange.Request)) {
+			if (!exchange.Request.QueryParameters.TryGetValue("response_type", out string? responseType)
 				|| string.IsNullOrWhiteSpace(responseType))
 				return RequestType.AuthorizationRequest_Unknown;
 
 			bool hasCode = OAuthParameterHelpers.HasResponseType(responseType, "code");
 			bool hasToken = OAuthParameterHelpers.HasResponseType(responseType, "token");
 			bool hasIdToken = OAuthParameterHelpers.HasResponseType(responseType, "id_token");
-			bool hasPkce = session.Request.QueryParameters.ContainsKey("code_challenge");
+			bool hasPkce = exchange.Request.QueryParameters.ContainsKey("code_challenge");
 
 			if (hasCode && (hasToken || hasIdToken))
 				return RequestType.AuthorizationRequest_Hybrid;
@@ -167,10 +144,10 @@ internal static class SessionClassifier {
 		return RequestType.Unknown;
 	}
 
-	static ResponseType ClassifyResponse(Session session, IReadOnlyList<Session> priorSessions) {
-		var response = session.Response;
-		var request = session.Request;
-		var discovery = EndpointClassifier.FindRelevantDiscovery(session, priorSessions);
+	public static ResponseType ClassifyResponse(Exchange exchange, IReadOnlyList<Exchange> priorExchanges) {
+		var response = exchange.Response;
+		var request = exchange.Request;
+		var discovery = EndpointClassifier.FindRelevantDiscovery(exchange, priorExchanges);
 
 		if (response.StatusCode >= 400)
 			return ResponseType.ErrorResponse;

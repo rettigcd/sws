@@ -1,7 +1,9 @@
 namespace Auth;
 
+using Saz;
+
 /// <summary>
-/// Low-level parameter/fragment/URL helpers shared by session classification and flow correlation.
+/// Low-level parameter/fragment/URL helpers shared by exchange classification and flow correlation.
 /// Ported near-verbatim from the original Azure-specific scanner; these were already generic.
 /// </summary>
 internal static class OAuthParameterHelpers {

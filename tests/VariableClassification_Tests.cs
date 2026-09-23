@@ -1,23 +1,24 @@
 namespace sws.Tests;
 
+using Saz;
 using System.Text.Json;
 using Auth;
 using Shouldly;
 using Xunit;
-using static sws.Tests.TestSessionBuilder;
+using static sws.Tests.TestExchangeBuilder;
 
 public class VariableClassification_Tests {
 
 	static List<Variable> BuildFlowVariables() {
-		var sessions = new List<Session> {
-			BuildSession(
+		var exchanges = new List<Exchange> {
+			BuildExchange(
 				1,
 				"GET",
 				"https://login.example.com/connect/authorize?client_id=my-client&response_type=code&code_challenge=chal-1&nonce=nonce-1&state=state-1&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=openid%20profile",
 				cookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["_ga"] = "GA1.1.111" }
 			),
-			BuildSession(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=state-1"),
-			BuildSession(
+			BuildExchange(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=state-1"),
+			BuildExchange(
 				3,
 				"POST",
 				"https://login.example.com/connect/token",
@@ -36,7 +37,7 @@ public class VariableClassification_Tests {
 			),
 		};
 
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 		result.Flows.Count.ShouldBe(1);
 		return result.Flows[0].Variables;
 	}

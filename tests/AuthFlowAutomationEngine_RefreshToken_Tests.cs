@@ -1,25 +1,26 @@
 namespace sws.Tests;
 
+using Saz;
 using System.Net.Http;
 using System.Text.Json;
 using Auth;
 using Automation;
 using Shouldly;
 using Xunit;
-using static sws.Tests.TestSessionBuilder;
+using static sws.Tests.TestExchangeBuilder;
 
 public class AuthFlowAutomationEngine_RefreshToken_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_RefreshesAccessToken_UsingSingleTokenEndpointCall() {
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "refresh_token"),
 				new("refresh_token", "captured-refresh-token"),
 				new("client_id", "client-1"),
 			}),
 		};
-		var detected = AuthFlowDetector.Detect(sessions);
+		var detected = AuthFlowDetector.Detect(exchanges);
 		var flow = detected.Flows.Single();
 		flow.FlowType.ShouldBe(AuthFlowType.RefreshToken);
 
@@ -28,7 +29,7 @@ public class AuthFlowAutomationEngine_RefreshToken_Tests {
 			{ "access_token": "fresh-access-token", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "rotated-refresh-token" }
 		"""));
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeTrue();
 		result.Tokens.ShouldNotBeNull();
@@ -39,14 +40,14 @@ public class AuthFlowAutomationEngine_RefreshToken_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_PrefersRefreshTokenOverride_OverCapturedValue() {
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "refresh_token"),
 				new("refresh_token", "captured-refresh-token-should-not-be-used"),
 				new("client_id", "client-1"),
 			}),
 		};
-		var flow = AuthFlowDetector.Detect(sessions).Flows.Single();
+		var flow = AuthFlowDetector.Detect(exchanges).Flows.Single();
 
 		var fakeHttpClient = new FakeAuthHttpClient();
 		string? capturedRequestBody = null;
@@ -56,7 +57,7 @@ public class AuthFlowAutomationEngine_RefreshToken_Tests {
 		});
 
 		var result = await AuthFlowAutomationEngine.ExecuteAsync(
-			flow, sessions,
+			flow, exchanges,
 			new AutomationOptions(HttpClient: fakeHttpClient, RefreshTokenOverride: "override-token")
 		);
 
@@ -67,7 +68,7 @@ public class AuthFlowAutomationEngine_RefreshToken_Tests {
 	}
 
 	[Fact]
-	public async Task RefreshAccessTokenAsync_Standalone_WorksWithoutOriginalFlowOrSessions() {
+	public async Task RefreshAccessTokenAsync_Standalone_WorksWithoutOriginalFlowOrExchanges() {
 		var fakeHttpClient = new FakeAuthHttpClient();
 		fakeHttpClient.Enqueue(HttpMethod.Post, "https://login.example.com/connect/token", request => FakeResponses.Json("""
 			{ "access_token": "standalone-access-token", "expires_in": 60 }
@@ -87,8 +88,8 @@ public class AuthFlowAutomationEngine_RefreshToken_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_ReturnsFailure_WhenNoRefreshTokenAvailable() {
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "client_credentials"),
 			}),
 		};
@@ -99,7 +100,7 @@ public class AuthFlowAutomationEngine_RefreshToken_Tests {
 
 		var fakeHttpClient = new FakeAuthHttpClient();
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeFalse();
 		result.UnsupportedReason!.Kind.ShouldBe(UnsupportedFlowReasonKind.MissingCredentials);

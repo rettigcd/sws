@@ -1,5 +1,7 @@
 namespace Automation;
 
+using Saz;
+
 /// <summary>
 /// Public entry point for executing a detected authentication flow (component 2, per docs/AUTH_FLOW_AUTOMATER_SPEC.md). 
 /// v1 supports AuthorizationCode/AuthorizationCodeWithPkce and RefreshToken only; 
@@ -12,7 +14,7 @@ internal static class AuthFlowAutomationEngine {
 
 	public static async Task<AutomationResult> ExecuteAsync(
 		Auth.DetectedAuthenticationFlow flow,
-		IReadOnlyList<Session> sessions,
+		IReadOnlyList<Exchange> exchanges,
 		AutomationOptions? options = null,
 		CancellationToken cancellationToken = default
 	) {
@@ -23,10 +25,10 @@ internal static class AuthFlowAutomationEngine {
 		try {
 			return flow.FlowType switch {
 				Auth.AuthFlowType.AuthorizationCode or Auth.AuthFlowType.AuthorizationCodeWithPkce =>
-					await AuthorizationCodeFlowHandler.ExecuteAsync(flow, sessions, options, httpClient, cancellationToken).ConfigureAwait(false),
+					await AuthorizationCodeFlowHandler.ExecuteAsync(flow, exchanges, options, httpClient, cancellationToken).ConfigureAwait(false),
 
 				Auth.AuthFlowType.RefreshToken =>
-					await RefreshTokenFlowHandler.ExecuteAsync(flow, sessions, options, httpClient, cancellationToken).ConfigureAwait(false),
+					await RefreshTokenFlowHandler.ExecuteAsync(flow, exchanges, options, httpClient, cancellationToken).ConfigureAwait(false),
 
 				_ => Unsupported(flow, httpClient),
 			};
@@ -39,7 +41,7 @@ internal static class AuthFlowAutomationEngine {
 
 	/// <summary>
 	/// Refreshes an access token using a refresh_token obtained from a prior ExecuteAsync call,
-	/// without needing the original flow/sessions again.
+	/// without needing the original flow/exchanges again.
 	/// </summary>
 	public static async Task<AutomationResult> RefreshAccessTokenAsync(
 		string tokenEndpoint,

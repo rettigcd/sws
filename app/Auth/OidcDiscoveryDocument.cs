@@ -1,3 +1,4 @@
+using Saz;
 using System.Text.Json;
 
 namespace Auth;
@@ -7,7 +8,7 @@ namespace Auth;
 /// (from /.well-known/openid-configuration or /.well-known/oauth-authorization-server).
 /// </summary>
 internal sealed record OidcDiscoveryDocument(
-	int SourceSessionId,
+	int SourceExchangeId,
 	string? Issuer,
 	string? AuthorizationEndpoint,
 	string? TokenEndpoint,
@@ -25,12 +26,12 @@ internal sealed record OidcDiscoveryDocument(
 internal static class DiscoveryDocumentParser {
 
 	/// <summary>
-	/// Attempts to parse a session's response body as an OIDC/OAuth2 discovery document.
+	/// Attempts to parse an exchange's response body as an OIDC/OAuth2 discovery document.
 	/// Returns null unless the response looks like a real discovery document
 	/// (has an issuer or an authorization_endpoint).
 	/// </summary>
-	public static OidcDiscoveryDocument? TryParse(Session session) {
-		if (session.Response.ResponseJson is not { ValueKind: JsonValueKind.Object } json)
+	public static OidcDiscoveryDocument? TryParse(Exchange exchange) {
+		if (exchange.Response.ResponseJson is not { ValueKind: JsonValueKind.Object } json)
 			return null;
 
 		string? issuer = GetString(json, "issuer");
@@ -39,7 +40,7 @@ internal static class DiscoveryDocumentParser {
 			return null;
 
 		return new OidcDiscoveryDocument(
-			session.SessionId,
+			exchange.ExchangeId,
 			issuer,
 			authorizationEndpoint,
 			GetString(json, "token_endpoint"),

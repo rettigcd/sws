@@ -1,5 +1,7 @@
 namespace sws.Tests;
 
+using Analysis;
+using Saz;
 using System.Text.Json;
 using Auth;
 using Shouldly;
@@ -7,20 +9,20 @@ using Xunit;
 
 public class SourceReportBuilder_Tests {
 	[Fact]
-	public void BuildSessionSourcesReport_UsesAzureB2CSourceReference_ForB2CFlowValues() {
+	public void BuildExchangeSourcesReport_UsesAzureB2CSourceReference_ForB2CFlowValues() {
 		var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		var challenge = "xqztrplkmnsvwbcdfghjklmn123456";
 
-		var b2cSession = BuildSession(
-			sessionId: 101,
+		var b2cExchange = BuildExchange(
+			exchangeId: 101,
 			url: $"https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=app-client&code_challenge={challenge}&response_type=code",
 			requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 		);
 
-		var report = SourceReportBuilder.BuildSessionSourcesReport(
-			sessionIndex: 0,
-			sessions: [b2cSession],
+		var report = SourceReportBuilder.BuildExchangeSourcesReport(
+			exchangeIndex: 0,
+			exchanges: [b2cExchange],
 			missing: missing,
 			unsourcedCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 		);
@@ -33,10 +35,10 @@ public class SourceReportBuilder_Tests {
 	}
 
 	[Fact]
-	public void BuildSessionSourcesReport_FlagsUnsourcedRequestCookies() {
+	public void BuildExchangeSourcesReport_FlagsUnsourcedRequestCookies() {
 		var sourcedCookieValue = "abc123";
-		var previousSession = BuildSession(
-			sessionId: 1,
+		var previousExchange = BuildExchange(
+			exchangeId: 1,
 			url: "https://example.com/start",
 			requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
@@ -44,8 +46,8 @@ public class SourceReportBuilder_Tests {
 			}
 		);
 
-		var targetSession = BuildSession(
-			sessionId: 2,
+		var targetExchange = BuildExchange(
+			exchangeId: 2,
 			url: "https://example.com/next",
 			requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
 				["session"] = sourcedCookieValue,
@@ -56,9 +58,9 @@ public class SourceReportBuilder_Tests {
 
 		var unsourcedCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-		var report = SourceReportBuilder.BuildSessionSourcesReport(
-			sessionIndex: 1,
-			sessions: [previousSession, targetSession],
+		var report = SourceReportBuilder.BuildExchangeSourcesReport(
+			exchangeIndex: 1,
+			exchanges: [previousExchange, targetExchange],
 			missing: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			unsourcedCookies: unsourcedCookies
 		);
@@ -74,9 +76,9 @@ public class SourceReportBuilder_Tests {
 	}
 
 	[Fact]
-	public void BuildSessionSourcesReport_DoesNotFlagAzureB2CCookiesAsUnsourced() {
-		var b2cSession = BuildSession(
-			sessionId: 3,
+	public void BuildExchangeSourcesReport_DoesNotFlagAzureB2CCookiesAsUnsourced() {
+		var b2cExchange = BuildExchange(
+			exchangeId: 3,
 			url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code",
 			requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
 				["x-ms-cpim-csrf"] = "csrf-token",
@@ -86,9 +88,9 @@ public class SourceReportBuilder_Tests {
 
 		var unsourcedCookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-		var report = SourceReportBuilder.BuildSessionSourcesReport(
-			sessionIndex: 0,
-			sessions: [b2cSession],
+		var report = SourceReportBuilder.BuildExchangeSourcesReport(
+			exchangeIndex: 0,
+			exchanges: [b2cExchange],
 			missing: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			unsourcedCookies: unsourcedCookies
 		);
@@ -99,27 +101,27 @@ public class SourceReportBuilder_Tests {
 	}
 
 	[Fact]
-	public void WriteAllSessionSourcesReport_IncludesClassifierRequestTypeInSerializedMappings() {
-		// Given: a tiny flow with authorize, callback, and token exchange sessions.
+	public void WriteAllExchangeSourcesReport_IncludesClassifierRequestTypeInSerializedMappings() {
+		// Given: a tiny flow with authorize, callback, and token exchange exchanges.
 		var tempDirectory = Path.Combine(Path.GetTempPath(), $"sws-tests-{Guid.NewGuid():N}");
 		Directory.CreateDirectory(tempDirectory);
-		var outputBasePath = Path.Combine(tempDirectory, "capture.sessions.json");
+		var outputBasePath = Path.Combine(tempDirectory, "capture.exchanges.json");
 
-		var sessions = new List<Session> {
-			BuildSession(
-				sessionId: 10,
+		var exchanges = new List<Exchange> {
+			BuildExchange(
+				exchangeId: 10,
 				url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&code_challenge=challenge-123",
 				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 			),
-			BuildSession(
-				sessionId: 11,
+			BuildExchange(
+				exchangeId: 11,
 				url: "https://app.example.com/signin-callback?code=auth-code&state=session-state",
 				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 			),
-			BuildSession(
-				sessionId: 12,
+			BuildExchange(
+				exchangeId: 12,
 				url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/token",
 				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
@@ -133,8 +135,8 @@ public class SourceReportBuilder_Tests {
 		};
 
 		try {
-			// When: all-session sources output is written to disk.
-			var sourcesPath = SazPlanBuilder.WriteAllSessionSourcesReport(outputBasePath, sessions);
+			// When: all-exchange sources output is written to disk.
+			var sourcesPath = SourceReportWriter.WriteAllExchangeSourcesReport(outputBasePath, exchanges);
 			var json = File.ReadAllText(sourcesPath);
 			using var document = JsonDocument.Parse(json);
 
@@ -152,15 +154,15 @@ public class SourceReportBuilder_Tests {
 	}
 
 	[Fact]
-	public void WriteAllSessionSourcesReport_SerializesRefreshTokenRequestRequestType() {
+	public void WriteAllExchangeSourcesReport_SerializesRefreshTokenRequestRequestType() {
 		// Given
 		var tempDirectory = Path.Combine(Path.GetTempPath(), $"sws-tests-{Guid.NewGuid():N}");
 		Directory.CreateDirectory(tempDirectory);
-		var outputBasePath = Path.Combine(tempDirectory, "capture.sessions.json");
+		var outputBasePath = Path.Combine(tempDirectory, "capture.exchanges.json");
 
-		var sessions = new List<Session> {
-			BuildSession(
-				sessionId: 20,
+		var exchanges = new List<Exchange> {
+			BuildExchange(
+				exchangeId: 20,
 				url: "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/token",
 				requestCookies: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 				responseHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
@@ -174,7 +176,7 @@ public class SourceReportBuilder_Tests {
 
 		try {
 			// When
-			var sourcesPath = SazPlanBuilder.WriteAllSessionSourcesReport(outputBasePath, sessions);
+			var sourcesPath = SourceReportWriter.WriteAllExchangeSourcesReport(outputBasePath, exchanges);
 			var json = File.ReadAllText(sourcesPath);
 			using var document = JsonDocument.Parse(json);
 
@@ -189,8 +191,8 @@ public class SourceReportBuilder_Tests {
 		}
 	}
 
-	static Session BuildSession(
-		int sessionId,
+	static Exchange BuildExchange(
+		int exchangeId,
 		string url,
 		Dictionary<string, string> requestCookies,
 		Dictionary<string, string> responseHeaders,
@@ -211,11 +213,9 @@ public class SourceReportBuilder_Tests {
 			null,
 			new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			requestCookies,
-			new List<string>(),
 			new Body(0, null, "none", new List<string>()),
 			null,
-			formBody,
-			new List<string>()
+			formBody
 		);
 
 		var response = new Response(
@@ -225,12 +225,10 @@ public class SourceReportBuilder_Tests {
 			responseHeaders,
 			new Body(0, null, "none", new List<string>()),
 			null,
-			null,
-			new List<string>(),
-			Auth.ResponseType.Unknown
+			null
 		);
 
-		return new Session(sessionId, null, null, request, response);
+		return new Exchange(exchangeId, null, null, request, response);
 	}
 
 	static Dictionary<string, string> ParseQueryParameters(Uri uri) {

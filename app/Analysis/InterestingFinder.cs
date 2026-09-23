@@ -1,3 +1,5 @@
+namespace Analysis;
+
 
 using System.Text.RegularExpressions;
 

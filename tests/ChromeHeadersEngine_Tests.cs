@@ -1,5 +1,7 @@
 namespace sws.Tests;
 
+using Saz;
+using Analysis;
 using Shouldly;
 using Xunit;
 
@@ -35,8 +37,8 @@ public class ChromeHeadersEngine_Tests {
 		var sazPath = Path.Combine(repoRoot, "saz", "stage.saz");
 		File.Exists(sazPath).ShouldBeTrue();
 
-		var plan = SazPlanBuilder.Build(sazPath, new SazBuildOptions());
-		plan.Sessions.Count.ShouldBeGreaterThan(0);
+		var session = SazReader.Read(sazPath);
+		session.Exchanges.Count.ShouldBeGreaterThan(0);
 
 		var managedHeaderNames = new[] {
 			"Accept",
@@ -56,8 +58,8 @@ public class ChromeHeadersEngine_Tests {
 			"User-Agent",
 		};
 
-		foreach (var session in plan.Sessions) {
-			var requestPlan = new RequestPlan(session.Request);
+		foreach (var exchange in session.Exchanges) {
+			var requestPlan = new RequestPlan(exchange.Request);
 			foreach (var managedHeaderName in managedHeaderNames)
 				requestPlan.Headers.ContainsKey(managedHeaderName).ShouldBeFalse();
 		}

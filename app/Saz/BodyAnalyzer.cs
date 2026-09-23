@@ -1,3 +1,5 @@
+namespace Saz;
+
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;

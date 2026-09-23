@@ -1,11 +1,12 @@
 namespace sws.Tests;
 
+using Saz;
 using System.Text.Json;
 
-static class TestSessionBuilder {
+static class TestExchangeBuilder {
 
-	public static Session BuildSession(
-		int sessionId,
+	public static Exchange BuildExchange(
+		int exchangeId,
 		string method,
 		string url,
 		Dictionary<string, string>? query = null,
@@ -15,7 +16,8 @@ static class TestSessionBuilder {
 		int statusCode = 200,
 		Dictionary<string, string>? cookies = null,
 		Dictionary<string, string>? requestHeaders = null,
-		string? fragment = null
+		string? fragment = null,
+		JsonElement? requestJson = null
 	) {
 		var uri = new Uri(url);
 		var queryParameters = query ?? ParseQueryParameters(uri);
@@ -31,11 +33,9 @@ static class TestSessionBuilder {
 			fragment,
 			requestHeaders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			cookies ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-			new List<string>(),
 			new Body(0, null, "none", new List<string>()),
-			null,
-			formBody,
-			new List<string>()
+			requestJson,
+			formBody
 		);
 
 		var response = new Response(
@@ -45,12 +45,10 @@ static class TestSessionBuilder {
 			responseHeaders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
 			new Body(0, null, "none", new List<string>()),
 			null,
-			responseJson,
-			new List<string>(),
-			Auth.ResponseType.Unknown
+			responseJson
 		);
 
-		return new Session(sessionId, null, null, request, response);
+		return new Exchange(exchangeId, null, null, request, response);
 	}
 
 	static Dictionary<string, string> ParseQueryParameters(Uri uri) {

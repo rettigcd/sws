@@ -1,10 +1,12 @@
 namespace Automation;
 
+using Saz;
+
 internal static class RefreshTokenFlowHandler {
 
 	public static async Task<AutomationResult> ExecuteAsync(
 		Auth.DetectedAuthenticationFlow flow,
-		IReadOnlyList<Session> sessions,
+		IReadOnlyList<Exchange> exchanges,
 		AutomationOptions options,
 		IAuthHttpClient httpClient,
 		CancellationToken cancellationToken
@@ -12,10 +14,10 @@ internal static class RefreshTokenFlowHandler {
 		var stepLog = new AutomationStepLog();
 		var variables = new List<ResolvedVariable>();
 
-		var endpoints = EndpointResolver.Resolve(flow, sessions);
+		var endpoints = EndpointResolver.Resolve(flow, exchanges);
 		if (string.IsNullOrWhiteSpace(endpoints.TokenEndpoint)) {
 			stepLog.Record("Unable to resolve token endpoint for this flow.", success: false);
-			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingRequiredEndpoint, "Could not resolve a token endpoint from discovery, B2C details, or captured sessions."));
+			return Failure(flow, stepLog, variables, httpClient, new UnsupportedFlowReason(UnsupportedFlowReasonKind.MissingRequiredEndpoint, "Could not resolve a token endpoint from discovery, B2C details, or captured exchanges."));
 		}
 
 		string? refreshToken = options.RefreshTokenOverride
@@ -40,7 +42,7 @@ internal static class RefreshTokenFlowHandler {
 		return await Execute(flow, endpoints.TokenEndpoint!, clientId, ResolveClientSecret(flow, options), refreshToken, options, httpClient, stepLog, variables, cancellationToken).ConfigureAwait(false);
 	}
 
-	/// <summary>Standalone refresh, usable without the original flow/sessions once a TokenSet.RefreshToken is known.</summary>
+	/// <summary>Standalone refresh, usable without the original flow/exchanges once a TokenSet.RefreshToken is known.</summary>
 	public static Task<AutomationResult> ExecuteStandaloneAsync(
 		string tokenEndpoint,
 		string clientId,

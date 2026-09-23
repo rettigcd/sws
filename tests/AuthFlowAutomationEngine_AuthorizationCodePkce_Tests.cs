@@ -1,5 +1,6 @@
 namespace sws.Tests;
 
+using Saz;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,32 +9,32 @@ using Auth;
 using Automation;
 using Shouldly;
 using Xunit;
-using static sws.Tests.TestSessionBuilder;
+using static sws.Tests.TestExchangeBuilder;
 
 public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	/// <summary>
-	/// A minimal 3-session capture: authorize -> callback (carrying the login form's
+	/// A minimal 3-exchange capture: authorize -> callback (carrying the login form's
 	/// username/password, since that's what a B2C self-asserted page's redirect ultimately
 	/// resolves to) -> token exchange. Mirrors the shape AuthFlowDetector_Tests uses for
-	/// UsernamePasswordCredentials detection, just with a token session added.
+	/// UsernamePasswordCredentials detection, just with a token exchange added.
 	/// </summary>
-	static List<Session> BuildCapturedB2cFlowSessions() {
+	static List<Exchange> BuildCapturedB2cFlowExchanges() {
 		return [
-			BuildSession(
+			BuildExchange(
 				1, "GET",
 				"https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize"
 				+ "?client_id=client-1&response_type=code&code_challenge=captured-challenge&code_challenge_method=S256"
 				+ "&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=openid%20profile&state=captured-state"
 			),
-			BuildSession(
+			BuildExchange(
 				2, "POST", "https://app.example.com/callback?code=captured-code&state=captured-state",
 				formBody: new List<FormBodyEntry> {
 					new("username", "captured-user@example.com"),
 					new("password", "captured-password"),
 				}
 			),
-			BuildSession(3, "POST", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/token", formBody: new List<FormBodyEntry> {
+			BuildExchange(3, "POST", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "captured-code"),
 				new("code_verifier", "captured-verifier"),
@@ -42,29 +43,29 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 	}
 
 	/// <summary>Authorize + callback (both carrying the B2C SSO cookie) + token, no login form observed.</summary>
-	static List<Session> BuildSsoSufficientSessions(bool includeTokenSession) {
+	static List<Exchange> BuildSsoSufficientExchanges(bool includeTokenExchange) {
 		var cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["x-ms-cpim-sso"] = "sso-cookie-value" };
-		var sessions = new List<Session> {
-			BuildSession(
+		var exchanges = new List<Exchange> {
+			BuildExchange(
 				1, "GET",
 				"https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize?client_id=client-1&response_type=code&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=captured-state",
 				cookies: cookies
 			),
-			BuildSession(2, "GET", "https://app.example.com/callback?code=captured-code&state=captured-state", cookies: cookies),
+			BuildExchange(2, "GET", "https://app.example.com/callback?code=captured-code&state=captured-state", cookies: cookies),
 		};
 
-		if (includeTokenSession) {
-			sessions.Add(BuildSession(3, "POST", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/token", formBody: new List<FormBodyEntry> {
+		if (includeTokenExchange) {
+			exchanges.Add(BuildExchange(3, "POST", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "captured-code"),
 			}));
 		}
 
-		return sessions;
+		return exchanges;
 	}
 
-	static DetectedAuthenticationFlow DetectPkceFlow(List<Session> sessions) {
-		var flow = AuthFlowDetector.Detect(sessions).Flows.Single();
+	static DetectedAuthenticationFlow DetectPkceFlow(List<Exchange> exchanges) {
+		var flow = AuthFlowDetector.Detect(exchanges).Flows.Single();
 		flow.FlowType.ShouldBe(AuthFlowType.AuthorizationCodeWithPkce);
 		flow.AuthenticationMethod.ShouldBeOfType<UsernamePasswordCredentials>();
 		return flow;
@@ -81,8 +82,8 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_CompletesFullLoginFormFlow_WithFreshPkceValues_AndReturnsTokensAndClaims() {
-		var sessions = BuildCapturedB2cFlowSessions();
-		var flow = DetectPkceFlow(sessions);
+		var exchanges = BuildCapturedB2cFlowExchanges();
+		var flow = DetectPkceFlow(exchanges);
 
 		string? generatedState = null;
 		string? generatedCodeChallenge = null;
@@ -132,7 +133,7 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 			""");
 		});
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeTrue(result.ErrorMessage ?? result.UnsupportedReason?.Message);
 		result.Tokens!.AccessToken.ShouldBe("final-access-token");
@@ -154,8 +155,8 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_SkipsLoginForm_WhenSessionCookieAloneCompletesAuthorization() {
-		var sessions = BuildSsoSufficientSessions(includeTokenSession: true);
-		var flow = AuthFlowDetector.Detect(sessions).Flows.Single(f => f.FlowType == AuthFlowType.AuthorizationCode);
+		var exchanges = BuildSsoSufficientExchanges(includeTokenExchange: true);
+		var flow = AuthFlowDetector.Detect(exchanges).Flows.Single(f => f.FlowType == AuthFlowType.AuthorizationCode);
 		flow.AuthenticationMethod.ShouldBeOfType<SessionCookieCredentials>();
 
 		var fakeHttpClient = new FakeAuthHttpClient();
@@ -167,7 +168,7 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 			FakeResponses.Json("""{ "access_token": "sso-access-token" }""")
 		);
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeTrue(result.ErrorMessage ?? result.UnsupportedReason?.Message);
 		result.Steps.ShouldNotContain(s => s.Description.Contains("Submitted login form"));
@@ -176,8 +177,8 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_ReturnsMissingCredentials_WhenSsoExpectedButCookieDoesNotWorkThisRun() {
-		var sessions = BuildSsoSufficientSessions(includeTokenSession: true);
-		var flow = AuthFlowDetector.Detect(sessions).Flows.Single(f => f.FlowType == AuthFlowType.AuthorizationCode);
+		var exchanges = BuildSsoSufficientExchanges(includeTokenExchange: true);
+		var flow = AuthFlowDetector.Detect(exchanges).Flows.Single(f => f.FlowType == AuthFlowType.AuthorizationCode);
 		flow.AuthenticationMethod.ShouldBeOfType<SessionCookieCredentials>();
 
 		var fakeHttpClient = new FakeAuthHttpClient();
@@ -185,7 +186,7 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 			FakeResponses.Html("<html><body><form><input type='password' name='Password'/></form></body></html>")
 		);
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeFalse();
 		result.UnsupportedReason!.Kind.ShouldBe(UnsupportedFlowReasonKind.MissingCredentials);
@@ -193,8 +194,8 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_ReturnsFailure_WhenLoginFormIsReDisplayedAfterSubmission() {
-		var sessions = BuildCapturedB2cFlowSessions();
-		var flow = DetectPkceFlow(sessions);
+		var exchanges = BuildCapturedB2cFlowExchanges();
+		var flow = DetectPkceFlow(exchanges);
 
 		var fakeHttpClient = new FakeAuthHttpClient();
 		var loginHtml = """
@@ -208,7 +209,7 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 		fakeHttpClient.Enqueue(HttpMethod.Get, "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize", _ => FakeResponses.Html(loginHtml));
 		fakeHttpClient.Enqueue(HttpMethod.Post, "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/login/submit", _ => FakeResponses.Html(loginHtml));
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeFalse();
 		result.UnsupportedReason.ShouldBeNull();
@@ -217,8 +218,8 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_ReturnsMfaRequired_WhenLoginPageHasExtraRequiredField() {
-		var sessions = BuildCapturedB2cFlowSessions();
-		var flow = DetectPkceFlow(sessions);
+		var exchanges = BuildCapturedB2cFlowExchanges();
+		var flow = DetectPkceFlow(exchanges);
 
 		var fakeHttpClient = new FakeAuthHttpClient();
 		fakeHttpClient.Enqueue(HttpMethod.Get, "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize", _ => FakeResponses.Html("""
@@ -231,7 +232,7 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 			</body></html>
 			"""));
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeFalse();
 		result.UnsupportedReason!.Kind.ShouldBe(UnsupportedFlowReasonKind.MfaRequired);
@@ -239,8 +240,8 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_ReturnsCaptchaRequired_WhenLoginPageHasCaptchaWidget() {
-		var sessions = BuildCapturedB2cFlowSessions();
-		var flow = DetectPkceFlow(sessions);
+		var exchanges = BuildCapturedB2cFlowExchanges();
+		var flow = DetectPkceFlow(exchanges);
 
 		var fakeHttpClient = new FakeAuthHttpClient();
 		fakeHttpClient.Enqueue(HttpMethod.Get, "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize", _ => FakeResponses.Html("""
@@ -249,7 +250,7 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 			</body></html>
 			"""));
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeFalse();
 		result.UnsupportedReason!.Kind.ShouldBe(UnsupportedFlowReasonKind.CaptchaRequired);
@@ -257,15 +258,15 @@ public class AuthFlowAutomationEngine_AuthorizationCodePkce_Tests {
 
 	[Fact]
 	public async Task ExecuteAsync_ReturnsFailure_WhenReturnedStateDoesNotMatchSentState() {
-		var sessions = BuildSsoSufficientSessions(includeTokenSession: true);
-		var flow = AuthFlowDetector.Detect(sessions).Flows.Single(f => f.FlowType == AuthFlowType.AuthorizationCode);
+		var exchanges = BuildSsoSufficientExchanges(includeTokenExchange: true);
+		var flow = AuthFlowDetector.Detect(exchanges).Flows.Single(f => f.FlowType == AuthFlowType.AuthorizationCode);
 
 		var fakeHttpClient = new FakeAuthHttpClient();
 		fakeHttpClient.Enqueue(HttpMethod.Get, "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize", _ =>
 			FakeResponses.Redirect("https://app.example.com/callback?code=sso-auth-code&state=attacker-controlled-state")
 		);
 
-		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, sessions, new AutomationOptions(HttpClient: fakeHttpClient));
+		var result = await AuthFlowAutomationEngine.ExecuteAsync(flow, exchanges, new AutomationOptions(HttpClient: fakeHttpClient));
 
 		result.Success.ShouldBeFalse();
 		result.Tokens.ShouldBeNull();

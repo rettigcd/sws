@@ -1,3 +1,7 @@
+namespace Analysis;
+
+using Saz;
+
 internal static class ReplacementSourceResolver {
 	static readonly HashSet<string> AzureB2cFlowValueKeys =
 	[
@@ -18,21 +22,21 @@ internal static class ReplacementSourceResolver {
 
 	public static void PopulateReplacementSources(
 		RequestPlan requestPlan,
-		IReadOnlyList<Session> previousSessions,
+		IReadOnlyList<Exchange> previousExchanges,
 		Dictionary<string, string>? missing,
-		bool isAzureB2cFlowSession,
-		Func<IReadOnlyList<Session>, string, List<SourceFinding>> getOrderedSources,
+		bool isAzureB2cFlowExchange,
+		Func<IReadOnlyList<Exchange>, string, List<SourceFinding>> getOrderedSources,
 		Func<Dictionary<string, string>, string, string, string> registerMissingValue
 	) {
 		foreach (var replacement in requestPlan.Replacements.Values) {
-			var orderedSources = getOrderedSources(previousSessions, replacement.OriginalValue);
+			var orderedSources = getOrderedSources(previousExchanges, replacement.OriginalValue);
 			var source = orderedSources.FirstOrDefault();
 			if (source is not null) {
 				replacement.Source = source;
 				continue;
 			}
 
-			if (isAzureB2cFlowSession && TryBuildAzureB2cSourceReference(replacement.Placeholder, out string azureB2cSource)) {
+			if (isAzureB2cFlowExchange && TryBuildAzureB2cSourceReference(replacement.Placeholder, out string azureB2cSource)) {
 				replacement.Source = azureB2cSource;
 				continue;
 			}

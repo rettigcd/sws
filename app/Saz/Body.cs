@@ -1,3 +1,5 @@
+namespace Saz;
+
 using System.Text.Json.Serialization;
 
 internal sealed record Body(

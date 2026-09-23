@@ -1,4 +1,6 @@
-internal sealed class SessionRaw(int id) {
+namespace Saz;
+
+internal sealed class ExchangeRaw(int id) {
 	public int Id { get; } = id;
 	public byte[]? ClientRequestBytes { get; set; }
 	public byte[]? ServerResponseBytes { get; set; }

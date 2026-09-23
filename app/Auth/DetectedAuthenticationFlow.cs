@@ -3,10 +3,10 @@ using System.Text.Json.Serialization;
 namespace Auth;
 
 /// <summary>
-/// A group of related sessions correlated into a single authentication flow.
+/// A group of related exchanges correlated into a single authentication flow.
 ///
 /// This is the contract a future replay engine (not built here) is expected to consume:
-/// endpoints (Discovery, or heuristically classified via the related sessions), ClientId/
+/// endpoints (Discovery, or heuristically classified via the related exchanges), ClientId/
 /// RedirectUri/Scopes (Configuration variables), PKCE derivation info (Variables with
 /// Category=Derived), and ReplayRequirements describing what must be regenerated vs. preserved.
 /// </summary>
@@ -20,12 +20,12 @@ internal sealed record DetectedAuthenticationFlow(
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AzureB2c.B2cFlowDetails? B2cDetails,
 
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] OidcDiscoveryDocument? Discovery,
-	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? DiscoveryRequestSessionId,
-	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? AuthorizationRequestSessionId,
-	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? AuthorizationCallbackSessionId,
-	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TokenRequestSessionId,
+	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? DiscoveryRequestExchangeId,
+	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? AuthorizationRequestExchangeId,
+	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? AuthorizationCallbackExchangeId,
+	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TokenRequestExchangeId,
 
-	List<int> RelatedSessionIds,
+	List<int> RelatedExchangeIds,
 
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Issuer,
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientId,

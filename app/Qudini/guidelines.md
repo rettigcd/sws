@@ -48,5 +48,5 @@ instructions are given; one-off feature requests (e.g. "add a step that does X")
   - `Automation.IAuthHttpClient` is `public` (not `internal`, unlike the rest of `Automation`) specifically
     so `TicketSession`'s public constructor can take it as a parameter.
   - The sequence of requests `TicketSession` drives is based on the captured flow in
-    `/saz/snl3/snl3.sessions.json` — each `Steps` method should correspond to one (or a related group)
-    of the sessions recorded there, in the same order.
+    `/saz/icecream2/icecream2.exchanges.json` — each `Steps` method should correspond to one (or a related group)
+    of the exchanges recorded there, in the same order.

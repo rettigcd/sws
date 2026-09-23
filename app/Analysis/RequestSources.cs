@@ -1,8 +1,10 @@
+namespace Analysis;
+
 using System.Text.Json.Serialization;
 
 internal sealed record RequestSources(
-	int SourceSessionIndex,
-	int SourceSessionId,
+	int SourceExchangeIndex,
+	int SourceExchangeId,
 	string Method,
 	string Url,
 	Auth.RequestType RequestType,
@@ -10,7 +12,7 @@ internal sealed record RequestSources(
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<RequestSourceFinding>? Findings
 );
 
-internal sealed record SessionSourcesBatchReport(
+internal sealed record ExchangeSourcesBatchReport(
 	string SourceBasePath,
 	Dictionary<string, string> Missing,
 	Dictionary<string, string> UnsourcedCookies,

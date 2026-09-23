@@ -1,52 +1,55 @@
+namespace Analysis;
+
+using Saz;
 using System.Text.Json;
 
 internal static class SourceReportBuilder {
-	public static AzureB2cSourceContext BuildAzureB2cSourceContext(IReadOnlyList<Session> sessions) {
-		var flowSessionIds = Auth.AuthFlowDetector
-			.Detect(sessions)
+	public static AzureB2cSourceContext BuildAzureB2cSourceContext(IReadOnlyList<Exchange> exchanges) {
+		var flowExchangeIds = Auth.AuthFlowDetector
+			.Detect(exchanges)
 			.Flows
 			.Where(flow => flow.IsAzureB2c)
-			.SelectMany(flow => flow.RelatedSessionIds)
+			.SelectMany(flow => flow.RelatedExchangeIds)
 			.ToHashSet();
 
-		return new AzureB2cSourceContext(flowSessionIds);
+		return new AzureB2cSourceContext(flowExchangeIds);
 	}
 
-	public static RequestSources BuildSessionSourcesReport(
-		int sessionIndex,
-		IReadOnlyList<Session> sessions,
+	public static RequestSources BuildExchangeSourcesReport(
+		int exchangeIndex,
+		IReadOnlyList<Exchange> exchanges,
 		Dictionary<string, string>? missing = null,
 		Dictionary<string, string>? unsourcedCookies = null,
 		AzureB2cSourceContext? azureB2cSourceContext = null
 	) {
-		var targetSession = sessions[sessionIndex];
-		var previousSessions = sessions.Take(sessionIndex).ToList();
-		azureB2cSourceContext ??= BuildAzureB2cSourceContext(sessions);
-		bool isAzureB2cFlowSession = azureB2cSourceContext.FlowSessionIds.Contains(targetSession.SessionId);
+		var targetExchange = exchanges[exchangeIndex];
+		var previousExchanges = exchanges.Take(exchangeIndex).ToList();
+		azureB2cSourceContext ??= BuildAzureB2cSourceContext(exchanges);
+		bool isAzureB2cFlowExchange = azureB2cSourceContext.FlowExchangeIds.Contains(targetExchange.ExchangeId);
 		var unsourcedCookieList = CookieSourceService.BuildUnsourcedRequestCookies(
-			targetSession,
-			previousSessions,
-			isAzureB2cFlowSession,
+			targetExchange,
+			previousExchanges,
+			isAzureB2cFlowExchange,
 			GetOrderedSources
 		);
 		CookieSourceService.RegisterUnsourcedCookies(unsourcedCookies, unsourcedCookieList, RegisterDictionaryValue);
-		var requestForPlan = CookieSourceService.BuildRequestForCookieJar(targetSession.Request, unsourcedCookieList);
+		var requestForPlan = CookieSourceService.BuildRequestForCookieJar(targetExchange.Request, unsourcedCookieList);
 		var requestPlan = new RequestPlan(requestForPlan);
 		ReplacementSourceResolver.PopulateReplacementSources(
 			requestPlan,
-			previousSessions,
+			previousExchanges,
 			missing,
-			isAzureB2cFlowSession,
+			isAzureB2cFlowExchange,
 			GetOrderedSources,
 			RegisterMissingValue
 		);
-		var requestType = Auth.SessionClassifier.ClassifySession(targetSession, previousSessions);
+		var requestType = Auth.ExchangeClassifier.ClassifyRequest(targetExchange, previousExchanges);
 
 		return new RequestSources(
-			sessionIndex,
-			targetSession.SessionId,
-			targetSession.Request.Method,
-			targetSession.Request.Url,
+			exchangeIndex,
+			targetExchange.ExchangeId,
+			targetExchange.Request.Method,
+			targetExchange.Request.Url,
 			requestType,
 			requestPlan,
 			null
@@ -54,31 +57,31 @@ internal static class SourceReportBuilder {
 	}
 
 	static List<RequestSourceFinding> BuildRequestSourceFindings(
-		Session targetSession,
+		Exchange targetExchange,
 		RequestPlan requestPlan,
-		IReadOnlyList<Session> sessions,
-		int sessionIndex,
+		IReadOnlyList<Exchange> exchanges,
+		int exchangeIndex,
 		Dictionary<string, string>? missing = null
 	) {
-		var previousSessions = sessions.Take(sessionIndex).ToList();
+		var previousExchanges = exchanges.Take(exchangeIndex).ToList();
 		var findings = new List<RequestSourceFinding>();
 
-		foreach (var piece in BuildRequestPieces(targetSession)) {
+		foreach (var piece in BuildRequestPieces(targetExchange)) {
 			if (piece.PieceKind == RequestSourcePieceKind.Path) {
-				findings.AddRange(BuildPathSourceFindings(piece, previousSessions, missing));
+				findings.AddRange(BuildPathSourceFindings(piece, previousExchanges, missing));
 				continue;
 			}
 
-			var orderedSources = GetOrderedSources(previousSessions, piece.Value);
+			var orderedSources = GetOrderedSources(previousExchanges, piece.Value);
 			findings.Add(BuildFinding(piece, orderedSources.FirstOrDefault(), missing));
 		}
 
-		bool isAzureB2cFlowSession = BuildAzureB2cSourceContext(sessions).FlowSessionIds.Contains(targetSession.SessionId);
+		bool isAzureB2cFlowExchange = BuildAzureB2cSourceContext(exchanges).FlowExchangeIds.Contains(targetExchange.ExchangeId);
 		ReplacementSourceResolver.PopulateReplacementSources(
 			requestPlan,
-			previousSessions,
+			previousExchanges,
 			missing,
-			isAzureB2cFlowSession,
+			isAzureB2cFlowExchange,
 			GetOrderedSources,
 			RegisterMissingValue
 		);
@@ -88,14 +91,14 @@ internal static class SourceReportBuilder {
 
 	static List<RequestSourceFinding> BuildPathSourceFindings(
 		RequestPiece pathPiece,
-		IReadOnlyList<Session> previousSessions,
+		IReadOnlyList<Exchange> previousExchanges,
 		Dictionary<string, string>? missing
 	) {
 		var findings = new List<RequestSourceFinding>();
 		string remaining = NormalizePathPart(pathPiece.Value);
 
 		while (!string.IsNullOrWhiteSpace(remaining)) {
-			string? foundPath = FindPathMatchWithProgressiveTrim(remaining, previousSessions, out var source);
+			string? foundPath = FindPathMatchWithProgressiveTrim(remaining, previousExchanges, out var source);
 			if (string.IsNullOrWhiteSpace(foundPath) || source is null) {
 				findings.Add(BuildFinding(new RequestPiece(pathPiece.PieceKind, pathPiece.Name, remaining), null, missing));
 				break;
@@ -115,14 +118,14 @@ internal static class SourceReportBuilder {
 
 	static string? FindPathMatchWithProgressiveTrim(
 		string path,
-		IReadOnlyList<Session> previousSessions,
+		IReadOnlyList<Exchange> previousExchanges,
 		out SourceFinding? source
 	) {
 		source = null;
 		string candidate = NormalizePathPart(path);
 
 		while (!string.IsNullOrWhiteSpace(candidate)) {
-			var orderedSources = GetOrderedSources(previousSessions, candidate);
+			var orderedSources = GetOrderedSources(previousExchanges, candidate);
 			source = orderedSources.FirstOrDefault();
 			if (source is not null)
 				return candidate;
@@ -133,14 +136,14 @@ internal static class SourceReportBuilder {
 		return null;
 	}
 
-	static List<SourceFinding> GetOrderedSources(IReadOnlyList<Session> previousSessions, string needle) {
+	static List<SourceFinding> GetOrderedSources(IReadOnlyList<Exchange> previousExchanges, string needle) {
 		var sources = new HashSet<SourceFinding>();
-		foreach (var previousSession in previousSessions)
-			foreach (var source in FindSourcesInPreviousResponse(previousSession, needle))
+		foreach (var previousExchange in previousExchanges)
+			foreach (var source in FindSourcesInPreviousResponse(previousExchange, needle))
 				sources.Add(source);
 
 		return sources
-			.OrderBy(source => source.SessionId)
+			.OrderBy(source => source.ExchangeId)
 			.ThenBy(source => source.SourceKind, StringComparer.OrdinalIgnoreCase)
 			.ThenBy(source => source.SourceName, StringComparer.OrdinalIgnoreCase)
 			.ThenBy(source => source.Needle, StringComparer.OrdinalIgnoreCase)
@@ -234,22 +237,22 @@ internal static class SourceReportBuilder {
 		return normalized[..lastSlash];
 	}
 
-	static List<RequestPiece> BuildRequestPieces(Session targetSession) {
+	static List<RequestPiece> BuildRequestPieces(Exchange targetExchange) {
 		var pieces = new List<RequestPiece>();
 
-		if (!string.IsNullOrWhiteSpace(targetSession.Request.Host))
-			pieces.Add(new RequestPiece(RequestSourcePieceKind.Host, "host", targetSession.Request.Host));
+		if (!string.IsNullOrWhiteSpace(targetExchange.Request.Host))
+			pieces.Add(new RequestPiece(RequestSourcePieceKind.Host, "host", targetExchange.Request.Host));
 
-		string path = GetRequestPath(targetSession.Request);
+		string path = GetRequestPath(targetExchange.Request);
 		if (!string.IsNullOrWhiteSpace(path) && !string.Equals(path, "/", StringComparison.Ordinal))
 			pieces.Add(new RequestPiece(RequestSourcePieceKind.Path, "path", path));
 
-		foreach (var queryParameter in targetSession.Request.QueryParameters.OrderBy(parameter => parameter.Key, StringComparer.OrdinalIgnoreCase))
+		foreach (var queryParameter in targetExchange.Request.QueryParameters.OrderBy(parameter => parameter.Key, StringComparer.OrdinalIgnoreCase))
 			if (!string.IsNullOrWhiteSpace(queryParameter.Value))
 				pieces.Add(new RequestPiece(RequestSourcePieceKind.QueryParameter, queryParameter.Key, queryParameter.Value));
 
-		if (string.Equals(targetSession.Request.Method, "POST", StringComparison.OrdinalIgnoreCase)) {
-			var bodyParameters = ExtractBodyParameters(targetSession.Request);
+		if (string.Equals(targetExchange.Request.Method, "POST", StringComparison.OrdinalIgnoreCase)) {
+			var bodyParameters = ExtractBodyParameters(targetExchange.Request);
 			foreach (var param in bodyParameters.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
 				if (!string.IsNullOrWhiteSpace(param.Value))
 					pieces.Add(new RequestPiece(RequestSourcePieceKind.BodyParameter, param.Key, param.Value));
@@ -287,23 +290,23 @@ internal static class SourceReportBuilder {
 		return parameters;
 	}
 
-	static IEnumerable<SourceFinding> FindSourcesInPreviousResponse(Session previousSession, string needle) {
+	static IEnumerable<SourceFinding> FindSourcesInPreviousResponse(Exchange previousExchange, string needle) {
 		if (string.IsNullOrWhiteSpace(needle))
 			yield break;
 
-		if (!string.IsNullOrWhiteSpace(previousSession.Request.Host) && ContainsInsensitive(previousSession.Request.Host, needle))
-			yield return new SourceFinding(previousSession.SessionId, "request host", "host", needle);
+		if (!string.IsNullOrWhiteSpace(previousExchange.Request.Host) && ContainsInsensitive(previousExchange.Request.Host, needle))
+			yield return new SourceFinding(previousExchange.ExchangeId, "request host", "host", needle);
 
-		foreach (var header in previousSession.Response.Headers.OrderBy(header => header.Key, StringComparer.OrdinalIgnoreCase))
+		foreach (var header in previousExchange.Response.Headers.OrderBy(header => header.Key, StringComparer.OrdinalIgnoreCase))
 			if (ContainsInsensitive(header.Value, needle))
-				yield return new SourceFinding(previousSession.SessionId, "response header", header.Key, needle);
+				yield return new SourceFinding(previousExchange.ExchangeId, "response header", header.Key, needle);
 
-		if (!string.IsNullOrWhiteSpace(previousSession.Response.ResponseText) && ContainsInsensitive(previousSession.Response.ResponseText, needle))
-			yield return new SourceFinding(previousSession.SessionId, "response body text", null, needle);
+		if (!string.IsNullOrWhiteSpace(previousExchange.Response.ResponseText) && ContainsInsensitive(previousExchange.Response.ResponseText, needle))
+			yield return new SourceFinding(previousExchange.ExchangeId, "response body text", null, needle);
 
-		if (previousSession.Response.ResponseJson is JsonElement responseJson)
+		if (previousExchange.Response.ResponseJson is JsonElement responseJson)
 			foreach (var match in FindJsonValueMatches(responseJson, needle, "$"))
-				yield return new SourceFinding(previousSession.SessionId, "response JSON", match.Path, needle);
+				yield return new SourceFinding(previousExchange.ExchangeId, "response JSON", match.Path, needle);
 
 	}
 
@@ -364,5 +367,5 @@ sealed record RequestPiece(
 );
 
 internal sealed record AzureB2cSourceContext(
-	HashSet<int> FlowSessionIds
+	HashSet<int> FlowExchangeIds
 );

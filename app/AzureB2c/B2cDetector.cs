@@ -1,5 +1,7 @@
 namespace AzureB2c;
 
+using Saz;
+
 /// <summary>
 /// Detects Azure AD B2C-specific signals in a URL: b2clogin.com/login.microsoftonline.com hosts,
 /// tenant and policy names (path segment or "p=" query parameter).

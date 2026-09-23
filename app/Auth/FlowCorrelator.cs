@@ -1,7 +1,9 @@
 namespace Auth;
 
+using Saz;
+
 /// <summary>
-/// Mutable in-progress flow used while correlating sessions. Converted to an immutable
+/// Mutable in-progress flow used while correlating exchanges. Converted to an immutable
 /// DetectedAuthenticationFlow once variables/replay-requirements/warnings have been attached.
 /// </summary>
 internal sealed class FlowInProgress {
@@ -11,11 +13,11 @@ internal sealed class FlowInProgress {
 	public List<string> ConfidenceReasons { get; } = [];
 
 	public OidcDiscoveryDocument? Discovery { get; set; }
-	public int? DiscoveryRequestSessionId { get; set; }
-	public int? AuthorizationRequestSessionId { get; set; }
-	public int? AuthorizationCallbackSessionId { get; set; }
-	public int? TokenRequestSessionId { get; set; }
-	public List<int> RelatedSessionIds { get; } = [];
+	public int? DiscoveryRequestExchangeId { get; set; }
+	public int? AuthorizationRequestExchangeId { get; set; }
+	public int? AuthorizationCallbackExchangeId { get; set; }
+	public int? TokenRequestExchangeId { get; set; }
+	public List<int> RelatedExchangeIds { get; } = [];
 
 	public string? Issuer { get; set; }
 	public string? ClientId { get; set; }
@@ -29,8 +31,8 @@ internal sealed class FlowInProgress {
 
 	public List<FlowWarning> Warnings { get; } = [];
 
-	public void AddWarning(FlowWarningKind kind, string message, params int[] relatedSessionIds) {
-		Warnings.Add(new FlowWarning(kind, message, relatedSessionIds.Length > 0 ? relatedSessionIds : [.. RelatedSessionIds]));
+	public void AddWarning(FlowWarningKind kind, string message, params int[] relatedExchangeIds) {
+		Warnings.Add(new FlowWarning(kind, message, relatedExchangeIds.Length > 0 ? relatedExchangeIds : [.. RelatedExchangeIds]));
 	}
 
 	public void ReduceConfidence(double delta, string reason) {
@@ -49,24 +51,26 @@ internal static class FlowCorrelator {
 		RequestType.AuthorizationRequest_Hybrid,
 	];
 
-	public static List<FlowInProgress> Correlate(IReadOnlyList<Session> sessions) {
+	public static List<FlowInProgress> Correlate(IReadOnlyList<ClassifiedExchange> classifiedExchanges) {
 		var flows = new List<FlowInProgress>();
 		int nextFlowId = 1;
+		var exchanges = classifiedExchanges.Select(c => c.Exchange).ToList();
+		var requestTypeById = classifiedExchanges.ToDictionary(c => c.ExchangeId, c => c.RequestType);
 
-		var authRequests = sessions.Where(s => AuthorizationRequestTypes.Contains(s.Request.RequestType)).ToList();
-		var callbacks = sessions.Where(s => s.Request.RequestType == RequestType.AuthorizationCallbackRequest).ToList();
-		var authCodeTokenRequests = sessions.Where(s => s.Request.RequestType == RequestType.AuthorizationCodeTokenRequest).ToList();
-		var refreshTokenRequests = sessions.Where(s => s.Request.RequestType == RequestType.RefreshTokenRequest).ToList();
-		var clientCredentialTokenRequests = sessions.Where(s => s.Request.RequestType == RequestType.ClientCredentialsTokenRequest).ToList();
-		var passwordTokenRequests = sessions.Where(s => s.Request.RequestType == RequestType.PasswordTokenRequest).ToList();
-		var deviceCodeTokenRequests = sessions.Where(s => s.Request.RequestType == RequestType.DeviceCodeTokenRequest).ToList();
-		var deviceAuthRequests = sessions.Where(s => s.Request.RequestType == RequestType.AuthorizationRequest_DeviceAuthorization).ToList();
+		var authRequests = OfRequestTypes(classifiedExchanges, AuthorizationRequestTypes);
+		var callbacks = OfRequestTypes(classifiedExchanges, RequestType.AuthorizationCallbackRequest);
+		var authCodeTokenRequests = OfRequestTypes(classifiedExchanges, RequestType.AuthorizationCodeTokenRequest);
+		var refreshTokenRequests = OfRequestTypes(classifiedExchanges, RequestType.RefreshTokenRequest);
+		var clientCredentialTokenRequests = OfRequestTypes(classifiedExchanges, RequestType.ClientCredentialsTokenRequest);
+		var passwordTokenRequests = OfRequestTypes(classifiedExchanges, RequestType.PasswordTokenRequest);
+		var deviceCodeTokenRequests = OfRequestTypes(classifiedExchanges, RequestType.DeviceCodeTokenRequest);
+		var deviceAuthRequests = OfRequestTypes(classifiedExchanges, RequestType.AuthorizationRequest_DeviceAuthorization);
 
 		// Step 3: seed one flow per authorization request.
 		var flowByAuthRequestId = new Dictionary<int, FlowInProgress>();
 		foreach (var authRequest in authRequests) {
-			var flow = SeedFlowFromAuthorizationRequest(authRequest, nextFlowId++);
-			flowByAuthRequestId[authRequest.SessionId] = flow;
+			var flow = SeedFlowFromAuthorizationRequest(authRequest, requestTypeById[authRequest.ExchangeId], nextFlowId++);
+			flowByAuthRequestId[authRequest.ExchangeId] = flow;
 			flows.Add(flow);
 		}
 
@@ -76,21 +80,21 @@ internal static class FlowCorrelator {
 			var match = MatchCallbackToAuthRequest(callback, authRequests, usedAuthRequestIds);
 			if (match is null) {
 				var orphan = SeedOrphanFlow(callback, nextFlowId++, "Authorization callback with no matching authorization request in capture.");
-				orphan.AuthorizationCallbackSessionId = callback.SessionId;
+				orphan.AuthorizationCallbackExchangeId = callback.ExchangeId;
 				flows.Add(orphan);
 				continue;
 			}
 
-			(Session authRequest, string reason, double confidenceDelta) = match.Value;
-			usedAuthRequestIds.Add(authRequest.SessionId);
-			var flow = flowByAuthRequestId[authRequest.SessionId];
+			(Exchange authRequest, string reason, double confidenceDelta) = match.Value;
+			usedAuthRequestIds.Add(authRequest.ExchangeId);
+			var flow = flowByAuthRequestId[authRequest.ExchangeId];
 			AttachCallback(flow, callback, reason, confidenceDelta);
 		}
 
 		foreach (var authRequest in authRequests) {
-			var flow = flowByAuthRequestId[authRequest.SessionId];
-			if (flow.AuthorizationCallbackSessionId is null)
-				flow.AddWarning(FlowWarningKind.MissingCallback, "No authorization callback observed for this authorization request.", authRequest.SessionId);
+			var flow = flowByAuthRequestId[authRequest.ExchangeId];
+			if (flow.AuthorizationCallbackExchangeId is null)
+				flow.AddWarning(FlowWarningKind.MissingCallback, "No authorization callback observed for this authorization request.", authRequest.ExchangeId);
 		}
 
 		// Step 5: match token requests -> flows.
@@ -108,7 +112,7 @@ internal static class FlowCorrelator {
 		}
 
 		foreach (var flow in flows) {
-			if (flow.AuthorizationCallbackSessionId is not null && flow.TokenRequestSessionId is null
+			if (flow.AuthorizationCallbackExchangeId is not null && flow.TokenRequestExchangeId is null
 				&& flow.FlowType is AuthFlowType.AuthorizationCode or AuthFlowType.AuthorizationCodeWithPkce) {
 				flow.AddWarning(FlowWarningKind.MissingTokenExchange, "Authorization callback observed but no token exchange followed.");
 			}
@@ -117,20 +121,20 @@ internal static class FlowCorrelator {
 		foreach (var tokenRequest in refreshTokenRequests) {
 			var flow = MatchRefreshTokenRequest(tokenRequest, flows);
 			if (flow is not null) {
-				flow.RelatedSessionIds.Add(tokenRequest.SessionId);
+				flow.RelatedExchangeIds.Add(tokenRequest.ExchangeId);
 				continue;
 			}
 
 			var orphan = SeedOrphanFlow(tokenRequest, nextFlowId++, "Refresh-token request with no originating flow found in capture.");
 			orphan.FlowType = AuthFlowType.RefreshToken;
-			orphan.TokenRequestSessionId = tokenRequest.SessionId;
+			orphan.TokenRequestExchangeId = tokenRequest.ExchangeId;
 			flows.Add(orphan);
 		}
 
 		foreach (var tokenRequest in clientCredentialTokenRequests) {
 			var flow = SeedStandaloneFlow(tokenRequest, nextFlowId++);
 			flow.FlowType = AuthFlowType.ClientCredentials;
-			flow.TokenRequestSessionId = tokenRequest.SessionId;
+			flow.TokenRequestExchangeId = tokenRequest.ExchangeId;
 			flow.ClientId = TryGet(tokenRequest.Request, "client_id");
 			flow.Scopes = SplitScopes(TryGet(tokenRequest.Request, "scope"));
 			flows.Add(flow);
@@ -139,7 +143,7 @@ internal static class FlowCorrelator {
 		foreach (var tokenRequest in passwordTokenRequests) {
 			var flow = SeedStandaloneFlow(tokenRequest, nextFlowId++);
 			flow.FlowType = AuthFlowType.ResourceOwnerPasswordCredentials;
-			flow.TokenRequestSessionId = tokenRequest.SessionId;
+			flow.TokenRequestExchangeId = tokenRequest.ExchangeId;
 			flow.ClientId = TryGet(tokenRequest.Request, "client_id");
 			flow.Scopes = SplitScopes(TryGet(tokenRequest.Request, "scope"));
 			flows.Add(flow);
@@ -149,20 +153,28 @@ internal static class FlowCorrelator {
 
 		// Step 6: attach discovery documents.
 		foreach (var flow in flows)
-			AttachDiscovery(flow, sessions);
+			AttachDiscovery(flow, exchanges);
 
 		return flows;
 	}
 
-	static FlowInProgress SeedFlowFromAuthorizationRequest(Session authRequest, int flowId) {
+	static List<Exchange> OfRequestTypes(IReadOnlyList<ClassifiedExchange> classifiedExchanges, RequestType requestType) {
+		return OfRequestTypes(classifiedExchanges, [requestType]);
+	}
+
+	static List<Exchange> OfRequestTypes(IReadOnlyList<ClassifiedExchange> classifiedExchanges, HashSet<RequestType> requestTypes) {
+		return classifiedExchanges.Where(c => requestTypes.Contains(c.RequestType)).Select(c => c.Exchange).ToList();
+	}
+
+	static FlowInProgress SeedFlowFromAuthorizationRequest(Exchange authRequest, RequestType requestType, int flowId) {
 		var flow = new FlowInProgress { FlowId = $"flow-{flowId}" };
-		flow.AuthorizationRequestSessionId = authRequest.SessionId;
-		flow.RelatedSessionIds.Add(authRequest.SessionId);
+		flow.AuthorizationRequestExchangeId = authRequest.ExchangeId;
+		flow.RelatedExchangeIds.Add(authRequest.ExchangeId);
 		flow.ClientId = TryGet(authRequest.Request, "client_id");
 		flow.RedirectUri = TryGet(authRequest.Request, "redirect_uri");
 		flow.Scopes = SplitScopes(TryGet(authRequest.Request, "scope"));
 		flow.CapturedState = TryGet(authRequest.Request, "state");
-		flow.FlowType = authRequest.Request.RequestType switch {
+		flow.FlowType = requestType switch {
 			RequestType.AuthorizationRequest_AuthCodeWithPKCE => AuthFlowType.AuthorizationCodeWithPkce,
 			RequestType.AuthorizationRequest_AuthCode => AuthFlowType.AuthorizationCode,
 			RequestType.AuthorizationRequest_Implicit => AuthFlowType.Implicit,
@@ -173,30 +185,30 @@ internal static class FlowCorrelator {
 		return flow;
 	}
 
-	static FlowInProgress SeedOrphanFlow(Session session, int flowId, string warningMessage) {
+	static FlowInProgress SeedOrphanFlow(Exchange exchange, int flowId, string warningMessage) {
 		var flow = new FlowInProgress { FlowId = $"flow-{flowId}" };
-		flow.RelatedSessionIds.Add(session.SessionId);
+		flow.RelatedExchangeIds.Add(exchange.ExchangeId);
 		flow.Confidence = 0.3;
-		flow.ConfidenceReasons.Add("Single unmatched session; no correlation performed.");
-		flow.AddWarning(FlowWarningKind.IncompleteFlow, warningMessage, session.SessionId);
+		flow.ConfidenceReasons.Add("Single unmatched exchange; no correlation performed.");
+		flow.AddWarning(FlowWarningKind.IncompleteFlow, warningMessage, exchange.ExchangeId);
 		return flow;
 	}
 
-	static FlowInProgress SeedStandaloneFlow(Session session, int flowId) {
+	static FlowInProgress SeedStandaloneFlow(Exchange exchange, int flowId) {
 		var flow = new FlowInProgress { FlowId = $"flow-{flowId}" };
-		flow.RelatedSessionIds.Add(session.SessionId);
-		flow.ConfidenceReasons.Add("Self-contained grant type; no cross-session correlation required.");
+		flow.RelatedExchangeIds.Add(exchange.ExchangeId);
+		flow.ConfidenceReasons.Add("Self-contained grant type; no cross-exchange correlation required.");
 		return flow;
 	}
 
-	static (Session AuthRequest, string Reason, double ConfidenceDelta)? MatchCallbackToAuthRequest(
-		Session callback,
-		List<Session> authRequests,
+	static (Exchange AuthRequest, string Reason, double ConfidenceDelta)? MatchCallbackToAuthRequest(
+		Exchange callback,
+		List<Exchange> authRequests,
 		HashSet<int> usedAuthRequestIds
 	) {
 		var priorCandidates = authRequests
-			.Where(a => a.SessionId < callback.SessionId && !usedAuthRequestIds.Contains(a.SessionId))
-			.OrderByDescending(a => a.SessionId)
+			.Where(a => a.ExchangeId < callback.ExchangeId && !usedAuthRequestIds.Contains(a.ExchangeId))
+			.OrderByDescending(a => a.ExchangeId)
 			.ToList();
 
 		if (priorCandidates.Count == 0)
@@ -229,9 +241,9 @@ internal static class FlowCorrelator {
 		return (sequenceMatch, "sequence-only fallback", 0.6);
 	}
 
-	static void AttachCallback(FlowInProgress flow, Session callback, string reason, double confidenceDelta) {
-		flow.AuthorizationCallbackSessionId = callback.SessionId;
-		flow.RelatedSessionIds.Add(callback.SessionId);
+	static void AttachCallback(FlowInProgress flow, Exchange callback, string reason, double confidenceDelta) {
+		flow.AuthorizationCallbackExchangeId = callback.ExchangeId;
+		flow.RelatedExchangeIds.Add(callback.ExchangeId);
 		flow.ReduceConfidence(confidenceDelta, reason);
 
 		string? code = callback.Request.QueryParameters.TryGetValue("code", out string? qsCode) ? qsCode : null;
@@ -244,36 +256,36 @@ internal static class FlowCorrelator {
 		flow.CapturedCode = code;
 	}
 
-	static FlowInProgress? MatchAuthorizationCodeTokenRequest(Session tokenRequest, List<FlowInProgress> flows) {
+	static FlowInProgress? MatchAuthorizationCodeTokenRequest(Exchange tokenRequest, List<FlowInProgress> flows) {
 		string? code = TryGet(tokenRequest.Request, "code");
 		if (code is not null) {
-			var exact = flows.FirstOrDefault(f => f.CapturedCode == code && f.TokenRequestSessionId is null);
+			var exact = flows.FirstOrDefault(f => f.CapturedCode == code && f.TokenRequestExchangeId is null);
 			if (exact is not null)
 				return exact;
 		}
 
 		return flows
-			.Where(f => f.TokenRequestSessionId is null
-				&& f.AuthorizationCallbackSessionId is not null
-				&& f.AuthorizationCallbackSessionId < tokenRequest.SessionId
+			.Where(f => f.TokenRequestExchangeId is null
+				&& f.AuthorizationCallbackExchangeId is not null
+				&& f.AuthorizationCallbackExchangeId < tokenRequest.ExchangeId
 				&& f.FlowType is AuthFlowType.AuthorizationCode or AuthFlowType.AuthorizationCodeWithPkce)
-			.OrderByDescending(f => f.AuthorizationCallbackSessionId)
+			.OrderByDescending(f => f.AuthorizationCallbackExchangeId)
 			.FirstOrDefault();
 	}
 
-	static void AttachTokenRequest(FlowInProgress flow, Session tokenRequest) {
-		flow.TokenRequestSessionId = tokenRequest.SessionId;
-		flow.RelatedSessionIds.Add(tokenRequest.SessionId);
+	static void AttachTokenRequest(FlowInProgress flow, Exchange tokenRequest) {
+		flow.TokenRequestExchangeId = tokenRequest.ExchangeId;
+		flow.RelatedExchangeIds.Add(tokenRequest.ExchangeId);
 	}
 
-	static void CaptureIssuedRefreshToken(FlowInProgress flow, Session tokenRequest) {
+	static void CaptureIssuedRefreshToken(FlowInProgress flow, Exchange tokenRequest) {
 		if (tokenRequest.Response.ResponseJson?.TryGetProperty("refresh_token", out var refreshTokenElement) == true
 			&& refreshTokenElement.ValueKind == System.Text.Json.JsonValueKind.String) {
 			flow.IssuedRefreshToken = refreshTokenElement.GetString();
 		}
 	}
 
-	static FlowInProgress? MatchRefreshTokenRequest(Session tokenRequest, List<FlowInProgress> flows) {
+	static FlowInProgress? MatchRefreshTokenRequest(Exchange tokenRequest, List<FlowInProgress> flows) {
 		string? refreshToken = TryGet(tokenRequest.Request, "refresh_token");
 		if (refreshToken is null)
 			return null;
@@ -282,8 +294,8 @@ internal static class FlowCorrelator {
 	}
 
 	static void CorrelateDeviceCodeFlows(
-		List<Session> deviceAuthRequests,
-		List<Session> deviceCodeTokenRequests,
+		List<Exchange> deviceAuthRequests,
+		List<Exchange> deviceCodeTokenRequests,
 		List<FlowInProgress> flows,
 		ref int nextFlowId
 	) {
@@ -292,52 +304,52 @@ internal static class FlowCorrelator {
 			string? deviceCode = deviceAuthRequest.Response.ResponseJson?.TryGetProperty("device_code", out var el) == true && el.ValueKind == System.Text.Json.JsonValueKind.String
 				? el.GetString()
 				: null;
-			deviceCodeByAuthRequest[deviceAuthRequest.SessionId] = deviceCode;
+			deviceCodeByAuthRequest[deviceAuthRequest.ExchangeId] = deviceCode;
 		}
 
 		var flowsByDeviceCode = new Dictionary<string, FlowInProgress>(StringComparer.Ordinal);
 
 		foreach (var deviceAuthRequest in deviceAuthRequests) {
 			var flow = new FlowInProgress { FlowId = $"flow-{nextFlowId++}", FlowType = AuthFlowType.DeviceCode };
-			flow.RelatedSessionIds.Add(deviceAuthRequest.SessionId);
+			flow.RelatedExchangeIds.Add(deviceAuthRequest.ExchangeId);
 			flow.ClientId = TryGet(deviceAuthRequest.Request, "client_id");
 			flow.Scopes = SplitScopes(TryGet(deviceAuthRequest.Request, "scope"));
 			flows.Add(flow);
 
-			if (deviceCodeByAuthRequest.TryGetValue(deviceAuthRequest.SessionId, out string? deviceCode) && deviceCode is not null)
+			if (deviceCodeByAuthRequest.TryGetValue(deviceAuthRequest.ExchangeId, out string? deviceCode) && deviceCode is not null)
 				flowsByDeviceCode[deviceCode] = flow;
 		}
 
 		foreach (var pollRequest in deviceCodeTokenRequests) {
 			string? deviceCode = TryGet(pollRequest.Request, "device_code");
 			if (deviceCode is not null && flowsByDeviceCode.TryGetValue(deviceCode, out var flow)) {
-				flow.RelatedSessionIds.Add(pollRequest.SessionId);
-				flow.TokenRequestSessionId = pollRequest.SessionId;
+				flow.RelatedExchangeIds.Add(pollRequest.ExchangeId);
+				flow.TokenRequestExchangeId = pollRequest.ExchangeId;
 				continue;
 			}
 
 			var orphan = SeedOrphanFlow(pollRequest, nextFlowId++, "Device-code token poll with no matching device authorization request in capture.");
 			orphan.FlowType = AuthFlowType.DeviceCode;
-			orphan.TokenRequestSessionId = pollRequest.SessionId;
+			orphan.TokenRequestExchangeId = pollRequest.ExchangeId;
 			flows.Add(orphan);
 		}
 	}
 
-	static void AttachDiscovery(FlowInProgress flow, IReadOnlyList<Session> sessions) {
-		int anchorSessionId = flow.AuthorizationRequestSessionId ?? flow.TokenRequestSessionId ?? flow.RelatedSessionIds.FirstOrDefault();
-		var anchorSession = sessions.FirstOrDefault(s => s.SessionId == anchorSessionId);
-		if (anchorSession is null)
+	static void AttachDiscovery(FlowInProgress flow, IReadOnlyList<Exchange> exchanges) {
+		int anchorExchangeId = flow.AuthorizationRequestExchangeId ?? flow.TokenRequestExchangeId ?? flow.RelatedExchangeIds.FirstOrDefault();
+		var anchorExchange = exchanges.FirstOrDefault(s => s.ExchangeId == anchorExchangeId);
+		if (anchorExchange is null)
 			return;
 
-		var priorSessions = sessions.Where(s => s.SessionId < anchorSession.SessionId).ToList();
-		var discovery = EndpointClassifier.FindRelevantDiscovery(anchorSession, priorSessions);
+		var priorExchanges = exchanges.Where(s => s.ExchangeId < anchorExchange.ExchangeId).ToList();
+		var discovery = EndpointClassifier.FindRelevantDiscovery(anchorExchange, priorExchanges);
 		if (discovery is null) {
 			flow.AddWarning(FlowWarningKind.MissingDiscoveryDocument, "No OIDC/OAuth2 discovery document observed for this flow; endpoints were inferred heuristically.");
 			return;
 		}
 
 		flow.Discovery = discovery;
-		flow.DiscoveryRequestSessionId = discovery.SourceSessionId;
+		flow.DiscoveryRequestExchangeId = discovery.SourceExchangeId;
 		flow.Issuer = discovery.Issuer;
 	}
 

@@ -1,5 +1,7 @@
 namespace Automation;
 
+using Analysis;
+
 /// <summary>Applies realistic browser-like headers to freshly-built requests, reusing the existing engine.</summary>
 internal static class HeaderHelpers {
 

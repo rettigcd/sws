@@ -1,3 +1,5 @@
+namespace Analysis;
+
 class Replacement {
 	public required string Placeholder { get; init; }
 	public required string OriginalValue { get; init; }

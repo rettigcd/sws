@@ -1,3 +1,5 @@
+namespace Analysis;
+
 using System.Net;
 
 internal sealed class RequestExecutionContext : IDisposable {

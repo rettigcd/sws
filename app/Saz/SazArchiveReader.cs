@@ -1,3 +1,5 @@
+namespace Saz;
+
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
@@ -8,11 +10,11 @@ internal static class SazArchiveReader {
 		RegexOptions.Compiled | RegexOptions.IgnoreCase
 	);
 
-	public static Dictionary<int, SessionRaw> LoadSessionRawMap(string sazPath) {
+	public static Dictionary<int, ExchangeRaw> LoadExchangeRawMap(string sazPath) {
 		using var stream = File.OpenRead(sazPath);
 		using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
 
-		var map = new Dictionary<int, SessionRaw>();
+		var map = new Dictionary<int, ExchangeRaw>();
 		foreach (var entry in archive.Entries) {
 			var match = RawFilePattern.Match(entry.FullName);
 			if (!match.Success)
@@ -21,9 +23,9 @@ internal static class SazArchiveReader {
 			int id = int.Parse(match.Groups["id"].Value, CultureInfo.InvariantCulture);
 			string kind = match.Groups["kind"].Value.ToLowerInvariant();
 
-			if (!map.TryGetValue(id, out var sessionRaw)) {
-				sessionRaw = new SessionRaw(id);
-				map[id] = sessionRaw;
+			if (!map.TryGetValue(id, out var exchangeRaw)) {
+				exchangeRaw = new ExchangeRaw(id);
+				map[id] = exchangeRaw;
 			}
 
 			using var entryStream = entry.Open();
@@ -33,13 +35,13 @@ internal static class SazArchiveReader {
 
 			switch (kind) {
 				case "c":
-					sessionRaw.ClientRequestBytes = bytes;
+					exchangeRaw.ClientRequestBytes = bytes;
 					break;
 				case "s":
-					sessionRaw.ServerResponseBytes = bytes;
+					exchangeRaw.ServerResponseBytes = bytes;
 					break;
 				case "m":
-					sessionRaw.MetadataBytes = bytes;
+					exchangeRaw.MetadataBytes = bytes;
 					break;
 			}
 		}

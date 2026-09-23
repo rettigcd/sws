@@ -1,11 +1,13 @@
+namespace Analysis;
+
 internal sealed record SourceFinding(
-	int SessionId,
+	int ExchangeId,
 	string SourceKind,
 	string? SourceName,
 	string Needle) {
 	public override string ToString() {
 		return SourceName is null
-			? $"Session {SessionId} {SourceKind} contained '{Needle}'"
-			: $"Session {SessionId} {SourceKind} '{SourceName}' contained '{Needle}'";
+			? $"Exchange {ExchangeId} {SourceKind} contained '{Needle}'"
+			: $"Exchange {ExchangeId} {SourceKind} '{SourceName}' contained '{Needle}'";
 	}
 }

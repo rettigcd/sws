@@ -1,5 +1,7 @@
 namespace Auth;
 
+using Saz;
+
 /// <summary>
 /// Classifies URLs as OIDC/OAuth2 endpoint types. Generic path-based matching first
 /// (works for any provider), refined by an optional discovery document when one was observed.
@@ -48,15 +50,15 @@ internal static class EndpointClassifier {
 	}
 
 	/// <summary>
-	/// Finds the discovery document (if any) most relevant to a session: the nearest preceding
+	/// Finds the discovery document (if any) most relevant to an exchange: the nearest preceding
 	/// discovery response on the same host, falling back to any preceding discovery response.
 	/// </summary>
-	public static OidcDiscoveryDocument? FindRelevantDiscovery(Session session, IReadOnlyList<Session> priorSessions) {
+	public static OidcDiscoveryDocument? FindRelevantDiscovery(Exchange exchange, IReadOnlyList<Exchange> priorExchanges) {
 		OidcDiscoveryDocument? anyPriorDiscovery = null;
-		string? host = TryGetHost(session.Request.Url);
+		string? host = TryGetHost(exchange.Request.Url);
 
-		for (int i = priorSessions.Count - 1; i >= 0; i--) {
-			var candidate = priorSessions[i];
+		for (int i = priorExchanges.Count - 1; i >= 0; i--) {
+			var candidate = priorExchanges[i];
 			if (!IsOpenIdConfiguration(candidate.Request.Url))
 				continue;
 

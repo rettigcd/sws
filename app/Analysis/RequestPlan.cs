@@ -1,3 +1,6 @@
+namespace Analysis;
+
+using Saz;
 using System.Dynamic;
 using System.Globalization;
 using System.Net;
@@ -36,7 +39,7 @@ internal sealed class RequestPlan {
 		QueryParameters = BuildQueryParameterPlaceholders(request.QueryParameters);
 
 		Version = ParseHttpVersion(request.Version);
-		Headers = ChromeHeadersEngine.BuildHeaderOverrides(request.Headers);
+		Headers = ChromeHeadersEngine.BuildHeaderOverrides(DynamicHeaders.Without(request.Headers));
 		Cookies = new Dictionary<string, string>(request.Cookies, StringComparer.OrdinalIgnoreCase);
 		Body = request.Body;
 		JsonBody = request.JsonBody is JsonElement jsonBody

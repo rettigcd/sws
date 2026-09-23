@@ -1,3 +1,5 @@
+namespace Saz;
+
 using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
@@ -6,7 +8,7 @@ internal static class SazMetadataParser {
 	private static readonly object MalformedMetadataLogLock = new();
 	private static readonly string MalformedMetadataLogPath = Path.Combine(Environment.CurrentDirectory, "malformed-metadata.log");
 
-	public static Metadata Parse(byte[]? metadataBytes, int sessionId) {
+	public static Metadata Parse(byte[]? metadataBytes, int exchangeId) {
 		if (metadataBytes is null || metadataBytes.Length == 0)
 			return new Metadata(new Dictionary<string, string>(), new Dictionary<string, string>());
 
@@ -19,7 +21,7 @@ internal static class SazMetadataParser {
 			doc = XDocument.Load(stream, LoadOptions.None);
 		}
 		catch (Exception ex) {
-			LogMalformedMetadata(sessionId, metadataBytes, ex);
+			LogMalformedMetadata(exchangeId, metadataBytes, ex);
 			return new Metadata(flags, timers);
 		}
 
@@ -38,13 +40,13 @@ internal static class SazMetadataParser {
 		return new Metadata(flags, timers);
 	}
 
-	private static void LogMalformedMetadata(int sessionId, byte[] metadataBytes, Exception ex) {
+	private static void LogMalformedMetadata(int exchangeId, byte[] metadataBytes, Exception ex) {
 		string utc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
 		string utf8 = Encoding.UTF8.GetString(metadataBytes);
 		string latin1 = Encoding.Latin1.GetString(metadataBytes);
 		string base64 = Convert.ToBase64String(metadataBytes);
 
-		string entry = $"[{utc}] Session {sessionId} malformed metadata. "
+		string entry = $"[{utc}] Exchange {exchangeId} malformed metadata. "
 			+ $"Length={metadataBytes.Length}. Error={ex.GetType().Name}: {ex.Message}{Environment.NewLine}"
 			+ $"UTF8:{Environment.NewLine}{utf8}{Environment.NewLine}"
 			+ $"Latin1:{Environment.NewLine}{latin1}{Environment.NewLine}"

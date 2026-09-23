@@ -11,7 +11,7 @@ internal sealed record Variable(
 	string Value,
 	VariableCategory Category,
 	VariableSource Source,
-	int SessionId,
+	int ExchangeId,
 
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? JsonPath = null,
 	[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DerivedFromVariableName = null,

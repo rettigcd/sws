@@ -1,3 +1,4 @@
+using Saz;
 using System.Text.Json;
 
 namespace Auth;
@@ -36,65 +37,65 @@ internal static class VariableExtractor {
 		"utm_", "_ga", "_gid", "ai_user", "ai_session", "optanonconsent", "optanonalertboxclosed",
 	];
 
-	public static List<Variable> Extract(FlowInProgress flow, IReadOnlyList<Session> allSessions) {
+	public static List<Variable> Extract(FlowInProgress flow, IReadOnlyList<Exchange> allExchanges) {
 		var variables = new List<Variable>();
-		var flowSessions = allSessions.Where(s => flow.RelatedSessionIds.Contains(s.SessionId));
+		var flowExchanges = allExchanges.Where(s => flow.RelatedExchangeIds.Contains(s.ExchangeId));
 
-		foreach (var session in flowSessions) {
-			ExtractFromRequest(session, variables);
-			ExtractFromResponse(session, variables);
+		foreach (var exchange in flowExchanges) {
+			ExtractFromRequest(exchange, variables);
+			ExtractFromResponse(exchange, variables);
 		}
 
 		return variables;
 	}
 
-	static void ExtractFromRequest(Session session, List<Variable> variables) {
-		foreach (var kvp in session.Request.QueryParameters)
-			Add(variables, kvp.Key, kvp.Value, VariableSource.QueryParameter, session.SessionId);
+	static void ExtractFromRequest(Exchange exchange, List<Variable> variables) {
+		foreach (var kvp in exchange.Request.QueryParameters)
+			Add(variables, kvp.Key, kvp.Value, VariableSource.QueryParameter, exchange.ExchangeId);
 
-		if (session.Request.FormBody is { Count: > 0 })
-			foreach (var entry in session.Request.FormBody)
-				Add(variables, entry.Key, entry.Value, VariableSource.FormField, session.SessionId);
+		if (exchange.Request.FormBody is { Count: > 0 })
+			foreach (var entry in exchange.Request.FormBody)
+				Add(variables, entry.Key, entry.Value, VariableSource.FormField, exchange.ExchangeId);
 
-		foreach (var kvp in session.Request.Headers)
-			Add(variables, kvp.Key, kvp.Value, VariableSource.RequestHeader, session.SessionId);
+		foreach (var kvp in exchange.Request.Headers)
+			Add(variables, kvp.Key, kvp.Value, VariableSource.RequestHeader, exchange.ExchangeId);
 
-		foreach (var kvp in session.Request.Cookies)
-			Add(variables, kvp.Key, kvp.Value, VariableSource.Cookie, session.SessionId);
+		foreach (var kvp in exchange.Request.Cookies)
+			Add(variables, kvp.Key, kvp.Value, VariableSource.Cookie, exchange.ExchangeId);
 
-		if (OAuthParameterHelpers.TryParseFragmentParameters(session.Request.Fragment, out var fragmentParams))
+		if (OAuthParameterHelpers.TryParseFragmentParameters(exchange.Request.Fragment, out var fragmentParams))
 			foreach (var kvp in fragmentParams)
-				Add(variables, kvp.Key, kvp.Value, VariableSource.FragmentParameter, session.SessionId);
+				Add(variables, kvp.Key, kvp.Value, VariableSource.FragmentParameter, exchange.ExchangeId);
 	}
 
-	static void ExtractFromResponse(Session session, List<Variable> variables) {
-		foreach (var kvp in session.Response.Headers) {
+	static void ExtractFromResponse(Exchange exchange, List<Variable> variables) {
+		foreach (var kvp in exchange.Response.Headers) {
 			var source = kvp.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase) ? VariableSource.SetCookie : VariableSource.ResponseHeader;
-			Add(variables, kvp.Key, kvp.Value, source, session.SessionId);
+			Add(variables, kvp.Key, kvp.Value, source, exchange.ExchangeId);
 		}
 
-		if (session.Response.ResponseJson is { ValueKind: JsonValueKind.Object } json)
+		if (exchange.Response.ResponseJson is { ValueKind: JsonValueKind.Object } json)
 			foreach (var property in json.EnumerateObject())
 				if (TryGetScalarString(property.Value, out string value))
-					Add(variables, property.Name, value, VariableSource.JsonBodyField, session.SessionId, jsonPath: $"$.{property.Name}");
+					Add(variables, property.Name, value, VariableSource.JsonBodyField, exchange.ExchangeId, jsonPath: $"$.{property.Name}");
 
-		if (session.Response.Headers.TryGetValue("Location", out string? location) && Uri.TryCreate(location, UriKind.Absolute, out var locationUri)) {
+		if (exchange.Response.Headers.TryGetValue("Location", out string? location) && Uri.TryCreate(location, UriKind.Absolute, out var locationUri)) {
 			foreach (var pair in ParseQuery(locationUri.Query))
-				Add(variables, pair.Key, pair.Value, VariableSource.RedirectUrlParameter, session.SessionId);
+				Add(variables, pair.Key, pair.Value, VariableSource.RedirectUrlParameter, exchange.ExchangeId);
 
 			if (OAuthParameterHelpers.TryParseFragmentParameters(locationUri.Fragment, out var locationFragmentParams))
 				foreach (var kvp in locationFragmentParams)
-					Add(variables, kvp.Key, kvp.Value, VariableSource.RedirectUrlParameter, session.SessionId);
+					Add(variables, kvp.Key, kvp.Value, VariableSource.RedirectUrlParameter, exchange.ExchangeId);
 		}
 	}
 
-	static void Add(List<Variable> variables, string name, string value, VariableSource source, int sessionId, string? jsonPath = null) {
+	static void Add(List<Variable> variables, string name, string value, VariableSource source, int exchangeId, string? jsonPath = null) {
 		if (string.IsNullOrWhiteSpace(name))
 			return;
 
 		var category = Classify(name, value, source);
 		string? derivedFrom = category == VariableCategory.Derived ? "code_verifier" : null;
-		variables.Add(new Variable(name, value, category, source, sessionId, jsonPath, derivedFrom));
+		variables.Add(new Variable(name, value, category, source, exchangeId, jsonPath, derivedFrom));
 	}
 
 	static VariableCategory Classify(string name, string value, VariableSource source) {

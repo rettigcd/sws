@@ -23,7 +23,7 @@ internal static class FlowWarningBuilder {
 			v.Source == VariableSource.RedirectUrlParameter
 			&& (v.Name.Equals("access_token", StringComparison.OrdinalIgnoreCase) || v.Name.Equals("id_token", StringComparison.OrdinalIgnoreCase))
 		)) {
-			flow.AddWarning(FlowWarningKind.SensitiveTokenExposure, $"{tokenVariable.Name} was exposed directly in a URL/fragment.", tokenVariable.SessionId);
+			flow.AddWarning(FlowWarningKind.SensitiveTokenExposure, $"{tokenVariable.Name} was exposed directly in a URL/fragment.", tokenVariable.ExchangeId);
 		}
 
 		if (variables.Any(v => v.Name.Contains("captcha", StringComparison.OrdinalIgnoreCase) || v.Name.Contains("mfa", StringComparison.OrdinalIgnoreCase)))

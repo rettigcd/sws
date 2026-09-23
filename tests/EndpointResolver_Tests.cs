@@ -1,18 +1,19 @@
 namespace sws.Tests;
 
+using Saz;
 using Auth;
 using Automation;
 using Shouldly;
 using Xunit;
-using static sws.Tests.TestSessionBuilder;
+using static sws.Tests.TestExchangeBuilder;
 
 public class EndpointResolver_Tests {
 
 	static DetectedAuthenticationFlow BuildFlow(
 		OidcDiscoveryDocument? discovery = null,
 		AzureB2c.B2cFlowDetails? b2cDetails = null,
-		int? authorizationRequestSessionId = null,
-		int? tokenRequestSessionId = null
+		int? authorizationRequestExchangeId = null,
+		int? tokenRequestExchangeId = null
 	) {
 		return new DetectedAuthenticationFlow(
 			FlowId: "flow-1",
@@ -22,11 +23,11 @@ public class EndpointResolver_Tests {
 			IsAzureB2c: b2cDetails is not null,
 			B2cDetails: b2cDetails,
 			Discovery: discovery,
-			DiscoveryRequestSessionId: null,
-			AuthorizationRequestSessionId: authorizationRequestSessionId,
-			AuthorizationCallbackSessionId: null,
-			TokenRequestSessionId: tokenRequestSessionId,
-			RelatedSessionIds: [],
+			DiscoveryRequestExchangeId: null,
+			AuthorizationRequestExchangeId: authorizationRequestExchangeId,
+			AuthorizationCallbackExchangeId: null,
+			TokenRequestExchangeId: tokenRequestExchangeId,
+			RelatedExchangeIds: [],
 			Issuer: null,
 			ClientId: "client-1",
 			RedirectUri: "https://app.example.com/callback",
@@ -67,18 +68,18 @@ public class EndpointResolver_Tests {
 	}
 
 	[Fact]
-	public void Resolve_FallsBackToCapturedSessionUrl_WhenNeitherDiscoveryNorB2cDetailsPresent() {
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code"),
-			BuildSession(2, "POST", "https://login.example.com/connect/token"),
+	public void Resolve_FallsBackToCapturedExchangeUrl_WhenNeitherDiscoveryNorB2cDetailsPresent() {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code"),
+			BuildExchange(2, "POST", "https://login.example.com/connect/token"),
 		};
-		var flow = BuildFlow(authorizationRequestSessionId: 1, tokenRequestSessionId: 2);
+		var flow = BuildFlow(authorizationRequestExchangeId: 1, tokenRequestExchangeId: 2);
 
-		var resolved = EndpointResolver.Resolve(flow, sessions);
+		var resolved = EndpointResolver.Resolve(flow, exchanges);
 
 		resolved.AuthorizationEndpoint.ShouldBe("https://login.example.com/connect/authorize");
 		resolved.TokenEndpoint.ShouldBe("https://login.example.com/connect/token");
-		resolved.Source.ShouldBe("captured-session:1");
+		resolved.Source.ShouldBe("captured-exchange:1");
 	}
 
 	[Fact]

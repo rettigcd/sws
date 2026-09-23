@@ -1,5 +1,7 @@
 namespace Automation;
 
+using Saz;
+
 internal sealed record ResolvedEndpoints(
 	string? AuthorizationEndpoint,
 	string? TokenEndpoint,
@@ -9,11 +11,11 @@ internal sealed record ResolvedEndpoints(
 
 /// <summary>
 /// Recovers the literal authorize/token endpoint URLs for a detected flow, since
-/// DetectedAuthenticationFlow only carries session IDs and Discovery may be null.
+/// DetectedAuthenticationFlow only carries exchange IDs and Discovery may be null.
 /// </summary>
 internal static class EndpointResolver {
 
-	public static ResolvedEndpoints Resolve(Auth.DetectedAuthenticationFlow flow, IReadOnlyList<Session> sessions) {
+	public static ResolvedEndpoints Resolve(Auth.DetectedAuthenticationFlow flow, IReadOnlyList<Exchange> exchanges) {
 		if (flow.Discovery is { AuthorizationEndpoint.Length: > 0 } or { TokenEndpoint.Length: > 0 }) {
 			return new ResolvedEndpoints(
 				flow.Discovery.AuthorizationEndpoint,
@@ -32,26 +34,26 @@ internal static class EndpointResolver {
 			);
 		}
 
-		string? authorizationEndpoint = FindCapturedEndpoint(sessions, flow.AuthorizationRequestSessionId);
-		string? tokenEndpoint = FindCapturedEndpoint(sessions, flow.TokenRequestSessionId);
+		string? authorizationEndpoint = FindCapturedEndpoint(exchanges, flow.AuthorizationRequestExchangeId);
+		string? tokenEndpoint = FindCapturedEndpoint(exchanges, flow.TokenRequestExchangeId);
 		if (authorizationEndpoint is not null || tokenEndpoint is not null) {
-			int? sourceId = flow.AuthorizationRequestSessionId ?? flow.TokenRequestSessionId;
-			return new ResolvedEndpoints(authorizationEndpoint, tokenEndpoint, flow.Issuer, $"captured-session:{sourceId}");
+			int? sourceId = flow.AuthorizationRequestExchangeId ?? flow.TokenRequestExchangeId;
+			return new ResolvedEndpoints(authorizationEndpoint, tokenEndpoint, flow.Issuer, $"captured-exchange:{sourceId}");
 		}
 
 		return new ResolvedEndpoints(null, null, flow.Issuer, "unresolved");
 	}
 
-	static string? FindCapturedEndpoint(IReadOnlyList<Session> sessions, int? sessionId) {
-		if (sessionId is null)
+	static string? FindCapturedEndpoint(IReadOnlyList<Exchange> exchanges, int? exchangeId) {
+		if (exchangeId is null)
 			return null;
 
-		var session = sessions.FirstOrDefault(s => s.SessionId == sessionId);
-		if (session is null)
+		var exchange = exchanges.FirstOrDefault(s => s.ExchangeId == exchangeId);
+		if (exchange is null)
 			return null;
 
-		return Uri.TryCreate(session.Request.Url, UriKind.Absolute, out var uri)
+		return Uri.TryCreate(exchange.Request.Url, UriKind.Absolute, out var uri)
 			? uri.GetLeftPart(UriPartial.Path)
-			: session.Request.Url;
+			: exchange.Request.Url;
 	}
 }

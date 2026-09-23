@@ -1,20 +1,21 @@
 namespace sws.Tests;
 
+using Saz;
 using System.Text.Json;
 using Auth;
 using Shouldly;
 using Xunit;
-using static sws.Tests.TestSessionBuilder;
+using static sws.Tests.TestExchangeBuilder;
 
 public class AuthFlowDetector_Tests {
 
 	[Fact]
 	public void Detect_CorrelatesAuthCodePkceFlow_ByStateMatch() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&code_challenge=xyz&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=st-1"),
-			BuildSession(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-1"),
-			BuildSession(3, "POST", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&code_challenge=xyz&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=st-1"),
+			BuildExchange(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-1"),
+			BuildExchange(3, "POST", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signin/oauth2/v2.0/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "auth-code-1"),
 				new("code_verifier", "verifier-1"),
@@ -22,33 +23,33 @@ public class AuthFlowDetector_Tests {
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
 		var flow = result.Flows[0];
 		flow.FlowType.ShouldBe(AuthFlowType.AuthorizationCodeWithPkce);
 		flow.Confidence.ShouldBe(1.0);
-		flow.AuthorizationRequestSessionId.ShouldBe(1);
-		flow.AuthorizationCallbackSessionId.ShouldBe(2);
-		flow.TokenRequestSessionId.ShouldBe(3);
-		flow.RelatedSessionIds.ShouldBe([1, 2, 3]);
+		flow.AuthorizationRequestExchangeId.ShouldBe(1);
+		flow.AuthorizationCallbackExchangeId.ShouldBe(2);
+		flow.TokenRequestExchangeId.ShouldBe(3);
+		flow.RelatedExchangeIds.ShouldBe([1, 2, 3]);
 	}
 
 	[Fact]
 	public void Detect_UsesDiscoveryDocumentEndpoints_ForNonStandardPaths() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://idp.example.com/.well-known/openid-configuration", responseJson: JsonDocument.Parse("""
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://idp.example.com/.well-known/openid-configuration", responseJson: JsonDocument.Parse("""
 				{
 					"issuer": "https://idp.example.com/",
 					"authorization_endpoint": "https://idp.example.com/custom/auth",
 					"token_endpoint": "https://idp.example.com/custom/tok"
 				}
 			""").RootElement.Clone()),
-			BuildSession(2, "GET", "https://idp.example.com/custom/auth?response_type=code&client_id=abc&code_challenge=xyz&state=st-42"),
-			BuildSession(3, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-42"),
-			BuildSession(4, "POST", "https://idp.example.com/custom/tok", formBody: new List<FormBodyEntry> {
+			BuildExchange(2, "GET", "https://idp.example.com/custom/auth?response_type=code&client_id=abc&code_challenge=xyz&state=st-42"),
+			BuildExchange(3, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-42"),
+			BuildExchange(4, "POST", "https://idp.example.com/custom/tok", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "auth-code-1"),
 				new("code_verifier", "verifier-1"),
@@ -56,22 +57,22 @@ public class AuthFlowDetector_Tests {
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
 		var flow = result.Flows[0];
 		flow.Discovery.ShouldNotBeNull();
 		flow.Discovery!.TokenEndpoint.ShouldBe("https://idp.example.com/custom/tok");
-		flow.TokenRequestSessionId.ShouldBe(4);
+		flow.TokenRequestExchangeId.ShouldBe(4);
 		flow.FlowType.ShouldBe(AuthFlowType.AuthorizationCodeWithPkce);
 	}
 
 	[Fact]
 	public void Detect_CreatesStandaloneClientCredentialsFlow() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "client_credentials"),
 				new("client_id", "service-client"),
 				new("client_secret", "shh"),
@@ -79,7 +80,7 @@ public class AuthFlowDetector_Tests {
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
@@ -92,15 +93,15 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_FlagsMissingClientSecret_ForClientCredentialsWithoutSecret() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "client_credentials"),
 				new("client_id", "service-client"),
 			}),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].Warnings.ShouldContain(w => w.Kind == FlowWarningKind.MissingClientSecret);
@@ -109,41 +110,41 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_LinksRefreshTokenRequest_ToOriginatingFlow() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=st-1"),
-			BuildSession(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-1"),
-			BuildSession(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=st-1"),
+			BuildExchange(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-1"),
+			BuildExchange(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "auth-code-1"),
 			}, responseJson: JsonDocument.Parse("""
 				{ "access_token": "at-1", "refresh_token": "rt-1" }
 			""").RootElement.Clone()),
-			BuildSession(4, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+			BuildExchange(4, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "refresh_token"),
 				new("refresh_token", "rt-1"),
 			}),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
-		result.Flows[0].RelatedSessionIds.ShouldContain(4);
+		result.Flows[0].RelatedExchangeIds.ShouldContain(4);
 	}
 
 	[Fact]
 	public void Detect_CreatesOrphanRefreshTokenFlow_WhenNoOriginatingFlowFound() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "refresh_token"),
 				new("refresh_token", "orphan-refresh-token"),
 			}),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
@@ -154,19 +155,19 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_GroupsDeviceCodePolls_IntoOneFlow() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "POST", "https://login.example.com/devicecode", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "POST", "https://login.example.com/devicecode", formBody: new List<FormBodyEntry> {
 				new("client_id", "abc"),
 				new("scope", "openid profile"),
 			}, responseJson: JsonDocument.Parse("""
 				{ "device_code": "dc-1", "user_code": "UC-1" }
 			""").RootElement.Clone()),
-			BuildSession(2, "POST", "https://login.example.com/token", formBody: new List<FormBodyEntry> {
+			BuildExchange(2, "POST", "https://login.example.com/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
 				new("device_code", "dc-1"),
 				new("client_id", "abc"),
 			}, responseJson: JsonDocument.Parse("""{ "error": "authorization_pending" }""").RootElement.Clone(), statusCode: 400),
-			BuildSession(3, "POST", "https://login.example.com/token", formBody: new List<FormBodyEntry> {
+			BuildExchange(3, "POST", "https://login.example.com/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
 				new("device_code", "dc-1"),
 				new("client_id", "abc"),
@@ -174,31 +175,31 @@ public class AuthFlowDetector_Tests {
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
 		var flow = result.Flows[0];
 		flow.FlowType.ShouldBe(AuthFlowType.DeviceCode);
-		flow.RelatedSessionIds.ShouldBe([1, 2, 3]);
-		flow.TokenRequestSessionId.ShouldBe(3);
+		flow.RelatedExchangeIds.ShouldBe([1, 2, 3]);
+		flow.TokenRequestExchangeId.ShouldBe(3);
 	}
 
 	[Fact]
 	public void Detect_FallsBackToSequenceMatch_WhenStateAndRedirectUriDoNotMatch() {
 		// Given: authorize has no redirect_uri and the callback's state does not match, forcing sequence-only correlation.
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
-			BuildSession(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-lost"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
+			BuildExchange(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-lost"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
 		var flow = result.Flows[0];
-		flow.AuthorizationCallbackSessionId.ShouldBe(2);
+		flow.AuthorizationCallbackExchangeId.ShouldBe(2);
 		flow.Confidence.ShouldBeLessThan(1.0);
 		flow.ConfidenceReasons.ShouldContain("sequence-only fallback");
 	}
@@ -206,17 +207,17 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_FlagsPkceMismatch_WhenCodeVerifierMissingFromTokenRequest() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&code_challenge=xyz&state=st-1"),
-			BuildSession(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-1"),
-			BuildSession(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&code_challenge=xyz&state=st-1"),
+			BuildExchange(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-1"),
+			BuildExchange(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "auth-code-1"),
 			}),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].Warnings.ShouldContain(w => w.Kind == FlowWarningKind.PkceMismatch);
@@ -225,12 +226,12 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_FlagsMissingCallback_WhenAuthorizationRequestHasNoFollowUp() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].Warnings.ShouldContain(w => w.Kind == FlowWarningKind.MissingCallback);
@@ -239,13 +240,13 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_FlagsMissingTokenExchange_WhenCallbackHasNoTokenRequest() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
-			BuildSession(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-1"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
+			BuildExchange(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-1"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].Warnings.ShouldContain(w => w.Kind == FlowWarningKind.MissingTokenExchange);
@@ -254,12 +255,12 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_FlagsUnsafeImplicitFlow_ForImplicitResponseType() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=token&state=st-1"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=token&state=st-1"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		var flow = result.Flows[0];
@@ -270,17 +271,17 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_FlagsMissingDiscoveryDocument_WhenNoneObserved() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
-			BuildSession(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-1"),
-			BuildSession(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
+			BuildExchange(2, "GET", "https://login.example.com/callback?code=auth-code-1&state=st-1"),
+			BuildExchange(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "auth-code-1"),
 			}),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].Warnings.ShouldContain(w => w.Kind == FlowWarningKind.MissingDiscoveryDocument);
@@ -289,10 +290,10 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_IncludesPkceReplayRequirements_ForPkceFlow() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&code_challenge=xyz&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=st-1"),
-			BuildSession(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-1"),
-			BuildSession(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&code_challenge=xyz&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&state=st-1"),
+			BuildExchange(2, "GET", "https://app.example.com/callback?code=auth-code-1&state=st-1"),
+			BuildExchange(3, "POST", "https://login.example.com/connect/token", formBody: new List<FormBodyEntry> {
 				new("grant_type", "authorization_code"),
 				new("code", "auth-code-1"),
 				new("code_verifier", "verifier-1"),
@@ -300,7 +301,7 @@ public class AuthFlowDetector_Tests {
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		var kinds = result.Flows[0].ReplayRequirements.Select(r => r.Kind).ToHashSet();
@@ -314,11 +315,11 @@ public class AuthFlowDetector_Tests {
 	[Fact]
 	public void Detect_IncludesUsernamePasswordCredentials_WhenPresentInAuthCallbackRequest() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(
+		var exchanges = new List<Exchange> {
+			BuildExchange(
 				100,
 				"POST",
-				"https://app.example.com/login",
+				"https://app.example.com/login?code=abc&state=xyz",
 				formBody: new List<FormBodyEntry> {
 					new("username", "user@example.com"),
 					new("password", "SecurePass123"),
@@ -327,18 +328,11 @@ public class AuthFlowDetector_Tests {
 					["Location"] = "https://app.example.com/callback?code=abc&state=xyz",
 				},
 				statusCode: 302
-			) with {
-				Request = BuildSession(100, "POST", "https://app.example.com/login", formBody: new List<FormBodyEntry> {
-					new("username", "user@example.com"),
-					new("password", "SecurePass123"),
-				}).Request with {
-					RequestType = RequestType.AuthorizationCallbackRequest,
-				}
-			}
+			)
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);
@@ -355,16 +349,12 @@ public class AuthFlowDetector_Tests {
 			["x-ms-cpim-sso"] = "sso-cookie-value-123",
 		};
 
-		var sessions = new List<Session> {
-			BuildSession(101, "GET", "https://app.example.com/protected", cookies: sessionCookies) with {
-				Request = BuildSession(101, "GET", "https://app.example.com/protected", cookies: sessionCookies).Request with {
-					RequestType = RequestType.AuthorizationCallbackRequest,
-				}
-			}
+		var exchanges = new List<Exchange> {
+			BuildExchange(101, "GET", "https://app.example.com/protected?code=abc&state=xyz", cookies: sessionCookies)
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows.Count.ShouldBe(1);

@@ -1,4 +1,6 @@
-﻿namespace sws.Tests;
+﻿using Analysis;
+
+namespace sws.Tests;
 
 using Shouldly;
 using Xunit;

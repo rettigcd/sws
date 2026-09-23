@@ -1,23 +1,25 @@
 namespace Auth;
 
+using Saz;
+
 /// <summary>
 /// Top-level entry point: detects and correlates OIDC/OAuth2/Azure-B2C authentication flows
-/// from a session capture. This is the "detector/analyzer" component only; a future replay
+/// from an exchange capture. This is the "detector/analyzer" component only; a future replay
 /// engine (not built here) is expected to consume AuthFlowDetectionResult.Flows.
 /// </summary>
 internal static class AuthFlowDetector {
 
-	public static AuthFlowDetectionResult Detect(IReadOnlyList<Session> sessions) {
-		var classifiedSessions = SessionClassifier.ClassifyUnknownSessions(sessions);
-		var flowsInProgress = FlowCorrelator.Correlate(classifiedSessions);
+	public static AuthFlowDetectionResult Detect(IReadOnlyList<Exchange> exchanges) {
+		var classifiedExchanges = ExchangeClassifier.Classify(exchanges);
+		var flowsInProgress = FlowCorrelator.Correlate(classifiedExchanges);
 
 		var flows = new List<DetectedAuthenticationFlow>();
 		foreach (var flow in flowsInProgress) {
-			var variables = VariableExtractor.Extract(flow, classifiedSessions);
-			(bool isAzureB2c, AzureB2c.B2cFlowDetails? b2cDetails) = AzureB2c.B2cEnricher.Enrich(flow, classifiedSessions);
+			var variables = VariableExtractor.Extract(flow, exchanges);
+			(bool isAzureB2c, AzureB2c.B2cFlowDetails? b2cDetails) = AzureB2c.B2cEnricher.Enrich(flow, exchanges);
 			var replayRequirements = ReplayRequirementBuilder.Build(flow, variables, isAzureB2c);
 			FlowWarningBuilder.AppendAnalysisWarnings(flow, variables);
-			var authenticationMethod = DetermineAuthenticationMethod(flow, variables, classifiedSessions);
+			var authenticationMethod = DetermineAuthenticationMethod(flow, variables, exchanges);
 
 			flows.Add(new DetectedAuthenticationFlow(
 				flow.FlowId,
@@ -27,11 +29,11 @@ internal static class AuthFlowDetector {
 				isAzureB2c,
 				b2cDetails,
 				flow.Discovery,
-				flow.DiscoveryRequestSessionId,
-				flow.AuthorizationRequestSessionId,
-				flow.AuthorizationCallbackSessionId,
-				flow.TokenRequestSessionId,
-				[.. flow.RelatedSessionIds.OrderBy(id => id)],
+				flow.DiscoveryRequestExchangeId,
+				flow.AuthorizationRequestExchangeId,
+				flow.AuthorizationCallbackExchangeId,
+				flow.TokenRequestExchangeId,
+				[.. flow.RelatedExchangeIds.OrderBy(id => id)],
 				flow.Issuer,
 				flow.ClientId,
 				flow.RedirectUri,
@@ -43,30 +45,30 @@ internal static class AuthFlowDetector {
 			));
 		}
 
-		var discoveryDocuments = classifiedSessions
-			.Where(s => s.Request.RequestType == RequestType.Configuration)
-			.Select(DiscoveryDocumentParser.TryParse)
+		var discoveryDocuments = classifiedExchanges
+			.Where(c => c.RequestType == RequestType.Configuration)
+			.Select(c => DiscoveryDocumentParser.TryParse(c.Exchange))
 			.Where(doc => doc is not null)
 			.Select(doc => doc!)
 			.ToList();
 
-		var sessionClassifications = classifiedSessions
-			.Where(s => s.Request.RequestType != RequestType.Unknown)
-			.Select(s => new RequestClassification(s.SessionId, s.Request.RequestType, s.Response.ResponseClassification))
+		var exchangeClassifications = classifiedExchanges
+			.Where(c => c.RequestType != RequestType.Unknown)
+			.Select(c => new RequestClassification(c.ExchangeId, c.RequestType, c.ResponseType))
 			.ToList();
 
 		return new AuthFlowDetectionResult(
 			DateTimeOffset.UtcNow,
-			[.. flows.OrderBy(f => f.RelatedSessionIds.Count > 0 ? f.RelatedSessionIds.Min() : int.MaxValue)],
+			[.. flows.OrderBy(f => f.RelatedExchangeIds.Count > 0 ? f.RelatedExchangeIds.Min() : int.MaxValue)],
 			discoveryDocuments,
-			sessionClassifications,
+			exchangeClassifications,
 			[]
 		);
 	}
 
-	static AuthenticationCredentials? DetermineAuthenticationMethod(FlowInProgress flow, List<Variable> variables, IReadOnlyList<Session> allSessions) {
-		var callbackSession = allSessions.FirstOrDefault(s => s.SessionId == flow.AuthorizationCallbackSessionId);
-		if (callbackSession?.Request.FormBody is { Count: > 0 } formBody) {
+	static AuthenticationCredentials? DetermineAuthenticationMethod(FlowInProgress flow, List<Variable> variables, IReadOnlyList<Exchange> allExchanges) {
+		var callbackExchange = allExchanges.FirstOrDefault(s => s.ExchangeId == flow.AuthorizationCallbackExchangeId);
+		if (callbackExchange?.Request.FormBody is { Count: > 0 } formBody) {
 			string? username = formBody
 				.FirstOrDefault(e => e.Key.Equals("username", StringComparison.OrdinalIgnoreCase)
 					|| e.Key.Equals("email", StringComparison.OrdinalIgnoreCase)

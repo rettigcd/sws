@@ -1,7 +1,8 @@
-internal sealed class SazBuildOptions{
+namespace Analysis;
+
+internal sealed class ExchangeFilterOptions {
 	public bool IncludeConnect;
 	public bool IncludeCss;
 	public bool IncludeMedia;
-	public bool IncludeMetadata;
 	public bool IncludeSourcemaps;
 }

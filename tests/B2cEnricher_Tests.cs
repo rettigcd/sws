@@ -1,21 +1,22 @@
 namespace sws.Tests;
 
+using Saz;
 using Auth;
 using Shouldly;
 using Xunit;
-using static sws.Tests.TestSessionBuilder;
+using static sws.Tests.TestExchangeBuilder;
 
 public class B2cEnricher_Tests {
 
 	[Fact]
 	public void Detect_ExtractsTenantAndPolicy_FromPathSegments() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&state=st-1"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&state=st-1"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		var flow = result.Flows[0];
@@ -28,12 +29,12 @@ public class B2cEnricher_Tests {
 	[Fact]
 	public void Detect_ExtractsPolicy_FromPQueryParameter() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://tenant.b2clogin.com/authorize?client_id=abc&response_type=code&state=st-1&p=B2C_1_signupsignin1"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://tenant.b2clogin.com/authorize?client_id=abc&response_type=code&state=st-1&p=B2C_1_signupsignin1"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].B2cDetails!.Policy.ShouldBe("B2C_1_signupsignin1");
@@ -42,8 +43,8 @@ public class B2cEnricher_Tests {
 	[Fact]
 	public void Detect_CollectsB2cCookies_IntoB2cDetails() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(
+		var exchanges = new List<Exchange> {
+			BuildExchange(
 				1,
 				"GET",
 				"https://tenant.b2clogin.com/tenant.onmicrosoft.com/b2c_1a_signup_signin/oauth2/v2.0/authorize?client_id=abc&response_type=code&state=st-1",
@@ -55,7 +56,7 @@ public class B2cEnricher_Tests {
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		var b2cCookies = result.Flows[0].B2cDetails!.B2cCookies;
@@ -66,12 +67,12 @@ public class B2cEnricher_Tests {
 	[Fact]
 	public void Detect_DoesNotFlagNonB2cFlow_AsAzureB2c() {
 		// Given
-		var sessions = new List<Session> {
-			BuildSession(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
+		var exchanges = new List<Exchange> {
+			BuildExchange(1, "GET", "https://login.example.com/connect/authorize?client_id=abc&response_type=code&state=st-1"),
 		};
 
 		// When
-		var result = AuthFlowDetector.Detect(sessions);
+		var result = AuthFlowDetector.Detect(exchanges);
 
 		// Then
 		result.Flows[0].IsAzureB2c.ShouldBeFalse();
