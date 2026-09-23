@@ -118,17 +118,7 @@ try {
 			ClickAnalyticsEvent.Null("Select Store", "Event Booking Store"));
 	}
 
-	// ---- Step 9: create the event booking session (tells Qudini which event this visitor is looking at). ----
-	EventBookingSessionRequest sessionRequest = new EventBookingSessionRequest {
-		SessionId = context.SessionId,
-		UserId = context.UserId,
-		BrowserVersion = $"{context.ChromeVersion}.0.0.0",
-		Referrer = context.IndexUrl,
-	};
-	await SendOptionalAsync("9. create event booking session", 
-		JsonPost($"{context.BaseUrl}/event-series/{context.SeriesId}/events/{context.SelectedEvent.Identifier}/session", 
-		JsonSerializer.Serialize(sessionRequest, JsonOptions))
-	);
+	await Step9_StartEventBookingSession(context);
 
 	if (config.Analytics) {
 		// ---- Step 10: report the selected event. ----
@@ -212,6 +202,20 @@ async Task Step7_GetEventsList(Context context) {
 	// - Slots available limit group size
 	context.Events = JsonSerializer.Deserialize<List<QudiniEvent>>(await SendAsync("7. get events", JsonGet($"{context.BaseUrl}/booking-widget/event/events/{context.SeriesId}")), JsonOptions)
 		?? throw new InvalidOperationException("Events response was empty.");
+}
+
+async Task Step9_StartEventBookingSession(Context context) {
+	// ---- Step 9: create the event booking session (tells Qudini which event this visitor is looking at). ----
+	EventBookingSessionRequest sessionRequest = new EventBookingSessionRequest {
+		SessionId = context.SessionId,
+		UserId = context.UserId,
+		BrowserVersion = $"{context.ChromeVersion}.0.0.0",
+		Referrer = context.IndexUrl,
+	};
+	await SendOptionalAsync("9. create event booking session",
+		JsonPost($"{context.BaseUrl}/event-series/{context.SeriesId}/events/{context.SelectedEvent.Identifier}/session",
+		JsonSerializer.Serialize(sessionRequest, JsonOptions))
+	);
 }
 
 // Headers a Chrome browser adds to every request.
