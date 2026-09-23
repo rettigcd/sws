@@ -84,13 +84,7 @@ try {
 			}, JsonOptions)));
 	}
 
-	// ---- Step 4: series settings. ----
-	// Gets the series settings.
-	//   max group size - helps us limit the group size
-	//   attibution answer - The first attribution answer ("No answer") goes into the booking.
-	context.SeriesSettings = JsonSerializer.Deserialize<SeriesSettings>(await SendAsync("4. get series settings", JsonGet($"{context.BaseUrl}/booking-widget/event/series/{context.SeriesId}")), JsonOptions)
-		?? throw new InvalidOperationException("Series settings response was empty.");
-	Console.WriteLine($"   attribution \"{context.SeriesSettings.DefaultAttributionQuestion}\", phone field {context.SeriesSettings.PhoneNumberState}");
+	await Step4_GetSeriesSettings(context);
 
 	// ---- Step 7: the events list. ----
 	// - numeric id goes into the booking
@@ -186,9 +180,9 @@ catch (Exception ex) {
 	return 1;
 }
 
-// ==========================
-// ========== Steps =========
-// ==========================
+// ================================
+// ======== Required Steps ========
+// ================================
 
 async Task Step1_GetBookingPage(Context context) {
 	// ---- Step 1: open the booking page. ----
@@ -204,6 +198,16 @@ async Task Step1_GetBookingPage(Context context) {
 	index.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
 	await SendAsync("1. open booking page", index);
 	Console.WriteLine($"   user id {context.UserId}, session id {context.SessionId}");
+}
+
+async Task Step4_GetSeriesSettings(Context context) {
+	// ---- Step 4: series settings. ----
+	// Gets the series settings.
+	//   max group size - helps us limit the group size
+	//   attribution answer - The first attribution answer ("No answer") goes into the booking.
+	context.SeriesSettings = JsonSerializer.Deserialize<SeriesSettings>(await SendAsync("4. get series settings", JsonGet($"{context.BaseUrl}/booking-widget/event/series/{context.SeriesId}")), JsonOptions)
+		?? throw new InvalidOperationException("Series settings response was empty.");
+	Console.WriteLine($"   attribution \"{context.SeriesSettings.DefaultAttributionQuestion}\", phone field {context.SeriesSettings.PhoneNumberState}");
 }
 
 // Headers a Chrome browser adds to every request.
