@@ -120,7 +120,7 @@ try {
 
 	await Step9_StartEventBookingSession(context);
 
-	if (config.Analytics) {
+	if (config.Analytics)
 		// ---- Step 10: report the selected event. ----
 		await PostAnalyticsAsync("10. post event analytics",
 			ClickAnalyticsEvent.Null("Select Date", "Event Booking Date"),
@@ -129,6 +129,7 @@ try {
 			ClickAnalyticsEvent.Click("Select Item Event Thumbnail", $"Event Booking: event selected ({context.SelectedEvent.Title})"),
 			ClickAnalyticsEvent.Click("Select Event Thumbnail", "Event Booking: click/select thumbnail event"));
 
+	if (config.Analytics)
 		// ---- Step 12: report the booking form fields. ----
 		await PostAnalyticsAsync("12. post booking form analytics",
 			ClickAnalyticsEvent.Click("Book Event Button Event Details", "Event Booking: book event button"),
@@ -137,7 +138,6 @@ try {
 			ClickAnalyticsEvent.Click("email", "Email"),
 			ClickAnalyticsEvent.Click("mobileNumber", "Phone number"),
 			ClickAnalyticsEvent.Click("groupSize", "Group Size"));
-	}
 
 	// ---- Exit Ramp ----
 	if (!config.Submit) {
@@ -147,10 +147,7 @@ try {
 		return 0;
 	}
 
-	// ---- Step 13: submit the booking. ----
-	var bookingResponse = JsonSerializer.Deserialize<BookingResponse>(await SendAsync("13. submit booking", JsonPost($"{context.BaseUrl}/booking-widget/series/{context.SeriesId}/event/book", context.GetBookingJson())), JsonOptions);
-	context.BookingReference = bookingResponse?.ReferenceNumber;
-	Console.WriteLine($"   booked. Reference number: {context.BookingReference ?? "(none in response)"}");
+	await Step13_SubmitBooking(context);
 
 	if (config.Analytics) {
 		// ---- Step 14: report completion of the customer details form. ----
@@ -216,6 +213,13 @@ async Task Step9_StartEventBookingSession(Context context) {
 		JsonPost($"{context.BaseUrl}/event-series/{context.SeriesId}/events/{context.SelectedEvent.Identifier}/session",
 		JsonSerializer.Serialize(sessionRequest, JsonOptions))
 	);
+}
+
+async Task Step13_SubmitBooking(Context context) {
+	// ---- Step 13: submit the booking. ----
+	var bookingResponse = JsonSerializer.Deserialize<BookingResponse>(await SendAsync("13. submit booking", JsonPost($"{context.BaseUrl}/booking-widget/series/{context.SeriesId}/event/book", context.GetBookingJson())), JsonOptions);
+	context.BookingReference = bookingResponse?.ReferenceNumber;
+	Console.WriteLine($"   booked. Reference number: {context.BookingReference ?? "(none in response)"}");
 }
 
 // Headers a Chrome browser adds to every request.
