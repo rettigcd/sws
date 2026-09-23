@@ -4,7 +4,7 @@
 
 Provide an authentication engine capable of reproducing previously detected authentication flows using the output of the Authentication Detector.
 
-The engine should automatically execute authentication exchanges on behalf of the caller and return authenticated session state (tokens, cookies, claims, expiration data, etc.).
+The engine should automatically execute authentication exchanges on behalf of the caller and return authenticated exchange state (tokens, cookies, claims, expiration data, etc.).
 
 The engine must support replaying flows against the same:
 
@@ -29,7 +29,7 @@ without requiring the caller to understand protocol details.
 
 The automater is a protocol engine, not a browser emulator.
 
-It should understand and execute OAuth / OpenID Connect / Azure AD B2C flows using protocol semantics. Captured HTTP sessions are used to infer flow shape, required variables, endpoints, cookies, form posts, and transition rules, but the engine should not blindly replay every request byte-for-byte.
+It should understand and execute OAuth / OpenID Connect / Azure AD B2C flows using protocol semantics. Captured HTTP exchanges are used to infer flow shape, required variables, endpoints, cookies, form posts, and transition rules, but the engine should not blindly replay every request byte-for-byte.
 
 The first supported provider family is Azure AD B2C / Microsoft Entra External ID. The design must allow future providers such as Okta, Auth0, Keycloak, and custom OpenID Connect providers through pluggable flow handlers.
 
@@ -56,10 +56,10 @@ The engine should:
 - Use a mockable HTTP client abstraction.
 - Maintain an in-memory execution state machine.
 - Track generated, discovered, extracted, and caller-supplied variables.
-- Prefer values discovered during execution over values copied from the original captured session.
+- Prefer values discovered during execution over values copied from the original captured exchange.
 - Allow caller overrides.
 - Automatically refresh access tokens when a refresh token is available.
-- Submit login forms only when the original detected session contained a form-based login step.
+- Submit login forms only when the original detected exchange contained a form-based login step.
 - Parse hidden HTML inputs and anti-forgery fields when needed.
 - Follow HTTP redirects according to the detected flow rules.
 - Capture authorization codes from redirect URLs.

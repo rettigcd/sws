@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add automatic detection and analysis of authentication-related HTTP sessions. A “session” is one request/response pair captured from logs. The application should inspect a sequence of sessions and determine whether any of them are part of a known authentication flow such as:
+Add automatic detection and analysis of authentication-related HTTP exchanges. A “exchange” is one request/response pair captured from logs. The application should inspect a sequence of exchanges and determine whether any of them are part of a known authentication flow such as:
 
 - OpenID Connect Authorization Code Flow
 - OpenID Connect Authorization Code Flow with PKCE
@@ -18,11 +18,11 @@ The feature should produce a structured result that explains the detected flow a
 
 ## Core Concepts
 
-### Session
+### Exchange
 
-A session represents one HTTP request/response pair.
+An exchange represents one HTTP request/response pair.
 
-Each session should expose:
+Each exchange should expose:
 
 - Request URL
 - HTTP method
@@ -40,7 +40,7 @@ Each session should expose:
 
 ### Authentication Flow
 
-An authentication flow is a related group of sessions that together perform login, token acquisition, token refresh, or logout.
+An authentication flow is a related group of exchanges that together perform login, token acquisition, token refresh, or logout.
 
 Example:
 
@@ -55,7 +55,7 @@ Example:
 
 ## Detection Requirements
 
-The analyzer should scan all sessions and identify sessions likely related to authentication.
+The analyzer should scan all exchanges and identify exchanges likely related to authentication.
 
 Detection signals include:
 
@@ -140,7 +140,7 @@ Classify grant type using `grant_type`:
 
 ### Redirect Callback
 
-Detect redirect/callback sessions where:
+Detect redirect/callback exchanges where:
 
 - Request URL matches a previously seen `redirect_uri`
 - Query or fragment-like data contains:
@@ -278,7 +278,7 @@ Examples:
 - `id_token`
 - `refresh_token`
 - server cookies
-- session IDs
+- exchange IDs
 
 ### Derived Variables
 
@@ -360,7 +360,7 @@ Optional/common:
 
 ## Flow Correlation
 
-The analyzer should group related sessions into a `DetectedAuthenticationFlow`.
+The analyzer should group related exchanges into a `DetectedAuthenticationFlow`.
 
 Correlation rules:
 
@@ -423,8 +423,8 @@ Emit warnings for:
 
 ## Acceptance Criteria
 
-1. Detect OIDC/OAuth/B2C sessions from logs.
-2. Group sessions into authentication flows.
+1. Detect OIDC/OAuth/B2C exchanges from logs.
+2. Group exchanges into authentication flows.
 3. Identify flow type.
 4. Identify endpoints.
 5. Extract configuration values.
@@ -438,7 +438,7 @@ Emit warnings for:
 
 ## Suggested Implementation Phases
 
-1. Session normalization.
+1. Exchange normalization.
 2. Endpoint classification.
 3. Flow correlation.
 4. Variable extraction.
@@ -454,5 +454,5 @@ There should be 2 components.
 1. A detector/analyzer - outputs all parameters needed to replicate the flow.
 2. A replayer engine - consumes detector/analyzer output and generates requests.
 
-- The replay engine should consume the generated result object and perform authentication using newly generated runtime values rather than reusing captured secrets, codes, or session artifacts.
+- The replay engine should consume the generated result object and perform authentication using newly generated runtime values rather than reusing captured secrets, codes, or exchange artifacts.
 - the replay engine uses an abstract http client so that it is easily tested.

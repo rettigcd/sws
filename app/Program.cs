@@ -1,4 +1,7 @@
-﻿using System.Text;
+﻿using Analysis;
+using Saz;
+using SazJson;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -22,12 +25,15 @@ if (!string.Equals(Path.GetExtension(inputPath), ".saz", StringComparison.Ordina
 
 string? outputPath = null;
 bool pretty = true;
-SazBuildOptions buildOptions = new ();
+ExchangeFilterOptions filterOptions = new();
+SessionJsonOptions jsonOptions = new();
+bool trace = false;
 
 for (int i = 1; i < args.Length; i++) {
 	string arg = args[i];
 	if (arg is "--compact") {
 		pretty = false;
+		jsonOptions.Pretty = false;
 	}
 	else if (arg is "--out") {
 		if (i + 1 >= args.Length) {
@@ -37,19 +43,22 @@ for (int i = 1; i < args.Length; i++) {
 		outputPath = args[++i];
 	}
 	else if (arg is "--include-connect") {
-		buildOptions.IncludeConnect = true;
+		filterOptions.IncludeConnect = true;
 	}
 	else if (arg is "--include-css") {
-		buildOptions.IncludeCss = true;
+		filterOptions.IncludeCss = true;
 	}
 	else if (arg is "--include-media") {
-		buildOptions.IncludeMedia = true;
+		filterOptions.IncludeMedia = true;
 	}
 	else if (arg is "--include-metadata") {
-		buildOptions.IncludeMetadata = true;
+		jsonOptions.IncludeMetadata = true;
 	}
 	else if (arg is "--include-sourcemaps") {
-		buildOptions.IncludeSourcemaps = true;
+		filterOptions.IncludeSourcemaps = true;
+	}
+	else if (arg is "--trace") {
+		trace = true;
 	}
 	else if (arg is "--sources-all") {
 		// Deprecated: sources report is now always generated.
@@ -61,15 +70,17 @@ for (int i = 1; i < args.Length; i++) {
 }
 
 try {
-	var plan = SazPlanBuilder.Build(inputPath, buildOptions);
-	var classifiedSessions = Auth.SessionClassifier.ClassifyUnknownSessions(plan.Sessions).ToList();
-	var classifiedPlan = plan with { Sessions = classifiedSessions };
+	var session = SazReader.Read(inputPath);
+	var exchanges = RedirectFragments.Attach(ExchangeFilter.Apply(session.Exchanges, filterOptions));
 	string planOutputPath = ResolveOutputPath(inputPath, outputPath);
-	string authOutputPath = SazPlanBuilder.DeriveSiblingOutputPath(planOutputPath, ".auth.json");
+	string authOutputPath = SourceReportWriter.DeriveSiblingOutputPath(planOutputPath, ".auth.json");
 
-	WriteSazPlanAsJson(planOutputPath, pretty, classifiedPlan);
-	WriteAuthFlowReportAsJson(authOutputPath, pretty, Auth.AuthFlowDetector.Detect(classifiedSessions));
-	SazPlanBuilder.WriteAllSessionSourcesReport(planOutputPath, classifiedSessions);
+	SessionJsonWriter.Write(planOutputPath, session with { Exchanges = exchanges }, jsonOptions);
+	WriteAuthFlowReportAsJson(authOutputPath, pretty, Auth.AuthFlowDetector.Detect(exchanges));
+	SourceReportWriter.WriteAllExchangeSourcesReport(planOutputPath, exchanges);
+
+	if (trace)
+		FlowTraceWriter.Write(planOutputPath, FlowTracer.TraceAll(exchanges, planOutputPath));
 
 	return 0;
 }
@@ -80,7 +91,7 @@ catch (Exception ex) {
 
 static void PrintUsage() {
 	Console.WriteLine("Usage:");
-	Console.WriteLine("  sws <input.saz> [--out plan.json] [--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps]");
+	Console.WriteLine("  sws <input.saz> [--out plan.json] [--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps] [--trace]");
 }
 
 static string ResolveOutputPath(string inputPath, string? outputPath) {
@@ -92,19 +103,7 @@ static string ResolveOutputPath(string inputPath, string? outputPath) {
 		return Path.Combine(inputDirectory, outputPath);
 	}
 
-	return Path.ChangeExtension(inputPath, ".sessions.json");
-}
-
-static void WriteSazPlanAsJson(string outputPath, bool pretty, Saz plan) {
-	string json = JsonSerializer.Serialize(plan, new JsonSerializerOptions {
-		WriteIndented = pretty,
-		IndentCharacter = '\t',
-		IndentSize = 1,
-		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-	});
-
-	File.WriteAllText(outputPath, json, Encoding.UTF8);
+	return Path.ChangeExtension(inputPath, ".exchanges.json");
 }
 
 static void WriteAuthFlowReportAsJson(
