@@ -32,8 +32,8 @@ var JsonOptions = new JsonSerializerOptions {
 const string ForSNL = "forSNL";
 
 UserConfig[] configs = [
+	// SNL
 	new UserConfig {
-		// SeriesId = "UZJLSRJUNZC",	// ice cream
 		SeriesId = "B9KIOO7ZIQF",	// snl
 		Show = "dress",				// event selector
 		FirstName = "Christopher",
@@ -42,6 +42,16 @@ UserConfig[] configs = [
 		Phone = "513-470-0774",
 		GroupSize = 1,
 		RunAt = ForSNL,
+	},
+	// Ice-Cream
+	new UserConfig {
+		SeriesId = "UZJLSRJUNZC",	// ice cream
+		Show = "dress",				// event selector
+		FirstName = "Christopher",
+		LastName = "Rettig",
+		Email = "rettigcd@gmail.com",
+		Phone = "513-470-0774",
+		GroupSize = 1,
 	}
 ];
 
@@ -112,14 +122,6 @@ if (context.SeriesId == "") {
 	return 2;
 }
 
-// ---- warn - not submitting ----
-if (!runConfig.Submit) {
-	Console.ForegroundColor = ConsoleColor.Red;
-	Console.Write("WARNING: The booking will NOT be submitted.");
-	Console.ResetColor();
-	Console.WriteLine(" Use --submit to ensure submission.\r\n");
-}
-
 // ---- wait ----
 if (!WaitUntilRunTime())
 	return 0;
@@ -154,7 +156,10 @@ try {
 		= context.Events.Where(selector).FirstOrDefault()	// the one we want
 		?? context.Events.Where(available).FirstOrDefault()	// fallback if desired one is unavailable
 		?? throw new InvalidOperationException("No matching event found. Use --list to see the events.");
-	Console.WriteLine($"   event {context.SelectedEvent.Identifier} (id {context.SelectedEvent.Id}) \"{context.SelectedEvent.Title}\" on {context.SelectedEvent.StartIso}, {context.SelectedEvent.SlotsAvailable} seats, max group {context.SelectedEvent.MaxGroupSize}");
+	Console.ForegroundColor = ConsoleColor.Green;
+	Console.Write($"   Selected Event: \"{context.SelectedEvent.Title}\" on {context.SelectedEvent.StartIso}, {context.SelectedEvent.SlotsAvailable} seats, max group {context.SelectedEvent.MaxGroupSize} ");
+	Console.ResetColor();
+	Console.WriteLine($"(slug {context.SelectedEvent.Identifier} id {context.SelectedEvent.Id})");
 
 	if (runConfig.Analytics)
 		await Step8_PostFilterAnalytics(context);
@@ -169,7 +174,11 @@ try {
 
 	// ---- Exit Ramp ----
 	if (!runConfig.Submit) {
-		Console.WriteLine("13. booking request (dry run, NOT sent; pass --submit to send):");
+		Console.Write("13. booking request (dry run, NOT sent; ");
+		Console.ForegroundColor = ConsoleColor.Red;
+		Console.Write("pass --submit to send");
+		Console.ResetColor();
+		Console.WriteLine("):");
 		Console.WriteLine($"   POST {context.BaseUrl}/booking-widget/series/{context.SeriesId}/event/book");
 		Console.WriteLine($"   {context.GetBookingJson()}");
 		return 0;
@@ -191,6 +200,17 @@ catch (Exception ex) {
 // ======= Wait until Run Time ======
 // ==================================
 bool WaitUntilRunTime() {
+
+	var now = DateTime.Now;
+	if (runTime <= now) return true;
+
+	if (!runConfig.Submit) {
+		Console.ForegroundColor = ConsoleColor.Red;
+		Console.Write("WARNING: The booking will NOT be submitted.");
+		Console.ResetColor();
+		Console.WriteLine(" Use --submit to ensure submission.\r\n");
+	}
+
 	int stopRequested = 0;
 	Console.CancelKeyPress += (_, eventArgs) => {
 		eventArgs.Cancel = true;
@@ -199,7 +219,6 @@ bool WaitUntilRunTime() {
 	};
 
 	var redTimeSpan = TimeSpan.FromMinutes(5);
-	var now = DateTime.Now;
 	while (now < runTime && Volatile.Read(ref stopRequested) == 0) {
 		TimeSpan remaining = runTime - now;
 		Console.Write("\rRun In: ");
