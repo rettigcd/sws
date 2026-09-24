@@ -15,7 +15,6 @@
 // ==== TODO ====
 // Create a User Preferences (seriesId, first, last, email, phone, show(event selector), group size, retry-strategy)
 // Log ALL HTTP Exchanges
-// Add the retry around the 1st step.
 // Add retry around other steps. - What retry?
 // Add Count-down timer.
 
@@ -135,7 +134,7 @@ using var http = new HttpClient(handler);
 context.Http = http;
 
 try {
-	await Step1_GetBookingPage(context);
+	await Step1_WithRetry(context);
 
 	if (runConfig.Analytics)
 		await Step3_RegisterWidgetSession(context);
@@ -238,6 +237,59 @@ bool WaitUntilRunTime() {
 // ================================
 // ======== Required Steps ========
 // ================================
+
+// Hedges Step 1: starts a new attempt every intervalMs until one returns a non-5xx response.
+// The first such attempt wins; the others still in flight are canceled.
+// A 4xx from the winner is rethrown, since retrying won't help.
+// Gives up after timeLimitMs in total, canceling anything still pending.
+async Task Step1_WithRetry(Context context, int intervalMs = 500, int timeLimitMs = 5000) {
+	var total = System.Diagnostics.Stopwatch.StartNew();
+	var pending = new List<Task<(int Number, TimeSpan Elapsed, Exception? Error)>>();
+	int attemptNumber = 0;
+
+	async Task<(int, TimeSpan, Exception?)> Attempt(int number) {
+		var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+		try {
+			await Step1_GetBookingPage(context);
+			return (number, stopwatch.Elapsed, null);
+		}
+		catch (Exception ex) {
+			return (number, stopwatch.Elapsed, ex);
+		}
+	}
+
+	while (true) {
+		long remainingMs = timeLimitMs - total.ElapsedMilliseconds;
+		if (remainingMs <= 0) {
+			http.CancelPendingRequests();
+			throw new TimeoutException($"1. open booking page: no usable response after {total.Elapsed.TotalMilliseconds:N0} ms and {attemptNumber} attempts.");
+		}
+		pending.Add(Attempt(++attemptNumber));
+		Task interval = Task.Delay((int)Math.Min(intervalMs, remainingMs));
+
+		// Until it is time for the next attempt, watch for any attempt to finish.
+		while (true) {
+			Task finished = await Task.WhenAny(pending.Append(interval));
+			if (finished == interval)
+				break;
+
+			var finishedAttempt = (Task<(int Number, TimeSpan Elapsed, Exception? Error)>)finished;
+			pending.Remove(finishedAttempt);
+			var (number, elapsed, error) = await finishedAttempt;
+
+			bool serverError = error is HttpRequestException { StatusCode: HttpStatusCode code } && (int)code >= 500;
+			bool retryable = serverError || (error is HttpRequestException { StatusCode: null } or TaskCanceledException);
+			if (error == null || !retryable) {
+				http.CancelPendingRequests();	// cancel the losers
+				Console.WriteLine($"   attempt {number} of {attemptNumber} finished in {elapsed.TotalMilliseconds:N0} ms ({total.Elapsed.TotalMilliseconds:N0} ms since the first request)");
+				if (error != null)
+					throw error;
+				return;
+			}
+			Console.WriteLine($"   attempt {number} failed after {elapsed.TotalMilliseconds:N0} ms: {error.Message}; {pending.Count} still pending");
+		}
+	}
+}
 
 async Task Step1_GetBookingPage(Context context) {
 	// ---- Step 1: open the booking page. ----
@@ -404,7 +456,7 @@ async Task<string> SendAsync(string label, HttpRequestMessage request) {
 		? $" (server is overloaded; it asks to retry after {retryAfter.First()} seconds)"
 		: "";
 	string excerpt = body.Length > 300 ? body[..300] + "..." : body;
-	throw new InvalidOperationException($"{label} returned {(int)response.StatusCode} {response.StatusCode}{hint}: {excerpt}");
+	throw new HttpRequestException($"{label} returned {(int)response.StatusCode} {response.StatusCode}{hint}: {excerpt}", null, response.StatusCode);
 }
 
 async Task PostAnalyticsAsync(string label, params ClickAnalyticsEvent[] events) {
