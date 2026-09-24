@@ -475,8 +475,6 @@ public sealed class Context {
 	public CookieContainer CookieJar { get; set; } = new();
 
 	// ------- config / options to select desired event ------
-	public string? EventIdentifier { get; set; }
-	public string? TitleText { get; set; }
 	public string Show { get; set; } = "";
 
 	// User Properties
