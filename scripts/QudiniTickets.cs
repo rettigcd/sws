@@ -29,16 +29,19 @@ var JsonOptions = new JsonSerializerOptions {
 	DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
 };
 
+const string ForSNL = "forSNL";
+
 UserConfig[] configs = [
 	new UserConfig {
 		// SeriesId = "UZJLSRJUNZC",	// ice cream
 		SeriesId = "B9KIOO7ZIQF",	// snl
-		Show = "pie",				// event selector
-		FirstName = "Test",
-		LastName = "User",
-		Email = "bob@thebuilder.com",
-		Phone = "513-555-1212",
-		GroupSize = 2
+		Show = "dress",				// event selector
+		FirstName = "Christopher",
+		LastName = "Rettig",
+		Email = "rettigcd@gmail.com",
+		Phone = "513-470-0774",
+		GroupSize = 1,
+		RunAt = ForSNL,
 	}
 ];
 
@@ -46,6 +49,7 @@ var context = new Context();
 var runConfig = new RunConfig();
 Func<QudiniEvent, bool> available = e => !e.HasPassed && e.SlotsAvailable > 0;
 Func<QudiniEvent, bool> selector = available;
+DateTime runTime = DateTime.Now;
 
 const string Usage = "Usage: dotnet run scripts/QudiniTickets.cs -- --config INDEX|--site snl|icecream [--analytics] [--submit] [--list] [--title TEXT] [--event IDENTIFIER] [--group-size N] [--series ID]";
 for (int i = 0; i < args.Length; i++) {
@@ -58,8 +62,14 @@ for (int i = 0; i < args.Length; i++) {
 				Console.Error.WriteLine(Usage);
 				return 2;
 			}
-			context.InitializeFrom(configs[configIndex]);
+			var config = configs[configIndex];
+			// User Info / Group Size
+			context.InitializeFrom(config);
+			// Show Selector
 			selector = e => e.Title.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
+			// Run At
+			if(config.RunAt == ForSNL)
+				runTime = GetNextThursday10Am(500);
 			break;
 		}
 		case "--site" when i + 1 < args.Length:{ 
@@ -101,6 +111,18 @@ if (context.SeriesId == "") {
 	Console.Error.WriteLine(Usage);
 	return 2;
 }
+
+// ---- warn - not submitting ----
+if (!runConfig.Submit) {
+	Console.ForegroundColor = ConsoleColor.Red;
+	Console.Write("WARNING: The booking will NOT be submitted.");
+	Console.ResetColor();
+	Console.WriteLine(" Use --submit to ensure submission.\r\n");
+}
+
+// ---- wait ----
+if (!WaitUntilRunTime())
+	return 0;
 
 using var handler = new HttpClientHandler {
 	CookieContainer = context.CookieJar,
@@ -164,6 +186,35 @@ catch (Exception ex) {
 	Console.Error.WriteLine($"FAILED: {ex.Message}");
 	return 1;
 }
+
+// ==================================
+// ======= Wait until Run Time ======
+// ==================================
+bool WaitUntilRunTime() {
+	int stopRequested = 0;
+	Console.CancelKeyPress += (_, eventArgs) => {
+		eventArgs.Cancel = true;
+		Interlocked.Exchange(ref stopRequested, 1);
+		Console.WriteLine("\nCancelled. Exiting.");
+	};
+
+	var redTimeSpan = TimeSpan.FromMinutes(5);
+	var now = DateTime.Now;
+	while (now < runTime && Volatile.Read(ref stopRequested) == 0) {
+		TimeSpan remaining = runTime - now;
+		Console.Write("\rRun In: ");
+		Console.ForegroundColor = remaining < redTimeSpan ? ConsoleColor.Red : ConsoleColor.Green;
+		Console.Write($"{remaining.Days} Days {remaining:hh\\:mm\\:ss}");
+		Console.ResetColor();
+		Console.Write($" at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
+		Thread.Sleep((int)Math.Min(remaining.TotalMilliseconds, 500));
+		now = DateTime.Now;
+	}
+	Console.WriteLine();
+
+	return Volatile.Read(ref stopRequested) == 0;
+}
+
 
 // ================================
 // ======== Required Steps ========
@@ -284,6 +335,15 @@ async Task Step14_PostBookingCompletionAnalytics(Context context) {
 		ClickAnalyticsEvent.Click("Complete Button Customer Details", "Event Booking: customer details complete button"));
 }
 
+DateTime GetNextThursday10Am(int msDelay) {
+	DateTime now = DateTime.Now;
+	int daysFromNow = ((7 + (int)DayOfWeek.Thursday - (int)now.DayOfWeek) % 7);
+	DateTime targetDate = now.Date.AddDays(daysFromNow);
+	int milliseconds = msDelay % 1000;
+	int seconds = (msDelay - milliseconds) / 1000;
+	return targetDate.AddHours(10).AddSeconds(seconds).AddMilliseconds(milliseconds);
+}
+
 
 // Headers a Chrome browser adds to every request.
 void AddBrowserHeaders(HttpRequestMessage request) {
@@ -353,6 +413,7 @@ public sealed class UserConfig {
 	public string Email { get; set; } = "";
 	public string Phone { get; set; } = "";
 	public int GroupSize = 2;
+	public string? RunAt { get; set; }
 	// retry-strategy)
 }
 
