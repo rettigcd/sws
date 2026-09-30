@@ -69,7 +69,7 @@ Three different technologies are involved. They can be told apart from the respo
 |---|---|---|---|
 | Entry page | `snlstandby.nbcuni.com` | ASP.NET on IIS (NBC's own site) | `Server: Microsoft-IIS/10.0`, `X-Powered-By: ASP.NET`. The page is a static 138-byte file (`Last-Modified: 2026-09-17`) containing only the iframe. |
 | Front ends | `pro.vow.app`, `go.vow.app` | Nuxt 2 (Vue.js framework) with Vuetify UI components | `data-n-head-ssr` on `<html>`, `data-n-head="ssr"` on meta tags, `vuetify-theme-stylesheet` and `v-application` styles, a page title of "Pro, VOW". `go.vow.app` also sends `x-powered-by: Nuxt`. The `pro.vow.app` page is server-rendered and about 985 KB. |
-| Backend API | `api.vow.app` | Laravel (PHP 8.3) with Laravel Sanctum, behind Cloudflare and an AWS load balancer | See the next subsection. |
+| Backend API | `api.vow.app` | Laravel (PHP 8.3) with Laravel Sanctum, behind Cloudflare and an AWS load balancer | See the next subsection. **Cloudflare blocks non-browser User-Agents** (403 "Error 1010"); see 7.6. |
 
 Consequence: the HTML pages are JavaScript apps and all the data comes from `api.vow.app`. A script never needs to parse the HTML. Only the JSON
 API matters.
@@ -320,10 +320,10 @@ What is **known**: the limit is 10, and one request had been counted when the he
 
 What is **not known** (not in any capture):
 
-- The window length. There is no `Retry-After` or reset header. Laravel's own default is 60 requests per minute, so a limit of 10 is a custom choice
+- The window length. There is no `Retry-After` or reset header. (Tests on 2026-09-24, section 7.6: `x-ratelimit-remaining` fell 9, 8, 7, 6, 5 over five RSVPs sent over a few minutes, with no reset seen, and the counter was shared across separate runs with different cookies.) Laravel's own default is 60 requests per minute, so a limit of 10 is a custom choice
   and the window could be a minute or something else.
-- What the limit is keyed on. Laravel defaults to the client IP (or the user id when logged in). For an anonymous visitor the key is most likely the IP address.
-- Whether requests that fail (422) still count. In this capture the first request, which failed with 422, did count (remaining fell to 9).
+- What the limit is keyed on. Laravel defaults to the client IP (or the user id when logged in). The 2026-09-24 tests showed it is **not** per cookie/session (separate cookie jars shared one counter), so for an anonymous visitor it is most likely the IP address.
+- Whether requests that fail still count: a 422 does count (remaining fell on every 422). A Cloudflare 403 (section 7.6) did not.
 - What happens when the limit is exceeded. Laravel's default is HTTP 429 with a `Retry-After` header. It was never triggered.
 
 **Any retry mechanism must respect this limit.** Requirements for a retry, hedge or polling strategy against the RSVP endpoint:
@@ -485,11 +485,45 @@ whereas Qudini's `groupSize` is total people. This mapping (`groupSize` = `plus_
 
 1. The success response of `PUT rsvp` (needs a capture while a show is open).
 2. Whether `X-Socket-ID` must be a real Pusher id (see 5.6). It was sent as the literal string `undefined` on the first listing call and the server still returned 200, so it may not be validated.
-3. Whether `log-interaction` calls are required, and whether the Pusher connection is required.
-4. Whether cookies are required at all (the first listing calls were made with only `AWSALBCORS`).
+3. Whether `log-interaction` calls and the Pusher connection are required for an event that has room. Not checked for a full event (7.6); untested otherwise.
+4. Whether cookies are required for an event that has room. The listing needs none, and a full event's RSVP ignored their absence (7.6). Untested otherwise.
 5. Exact `status` values in the listing when a show is open or upcoming.
 6. Whether there is any bot detection (see section 9).
 7. Whether `plus_ones` is additional guests (assumed) or total group size.
+
+### 7.6 Tests of what is required (run 2026-09-24)
+
+Question: are the browser-mimicking calls (page view, auth check, Pusher/`X-Socket-ID`, `log-interaction`), cookies, and `Origin`/`Referer` needed for the RSVP?
+
+Method: with both events full, send the real RSVP (`PUT .../attendees/rsvp`, placeholder name/email, Dress Rehearsal, journey 1367) with different things omitted,
+and compare the response. A full event answers 422 `{"error":"This event is full.","capacity_full":true,...}` and takes no seat. If omitting something changes the answer,
+that thing is checked. Sent from `scripts/VowTickets.cs` (rows A, B) and a scratch Python script (the rest).
+
+| Run | What was sent | Result | `x-ratelimit-remaining` after |
+|---|---|---|---|
+| B | `VowTickets.cs` default: events list + `load-for-visitor` + RSVP. No `--analytics`, so no `X-Socket-ID`, no page view, no `log-interaction`. Chrome UA, Origin, Referer. | 422 event full | 9 |
+| A | `VowTickets.cs --analytics`: adds page view, auth check, Pusher connect (real socket id), 2 `log-interaction` calls. | 422 event full | 8 |
+| C | No cookies at all (no `load-for-visitor`), browser UA, Origin, Referer. | 422 event full | 7 |
+| F | Cookies, made-up `X-Socket-ID: 123456.7890123`. | 422 event full | 6 |
+| E2 | Browser UA only: no cookies, no Origin, no Referer. | 422 event full | 5 |
+| E | Cookies, Origin and Referer removed, **and Python's default User-Agent**. | **403 Cloudflare "Error 1010: Access denied"** | not sent |
+| G | Origin/Referer present, Python default User-Agent. | **403 Cloudflare 1010** | not sent |
+| H | `GET` events list with Python default User-Agent. | **403 Cloudflare 1010** | n/a |
+
+Conclusions:
+
+1. **A browser `User-Agent` is required, on every endpoint.** Cloudflare (in front of `api.vow.app`) returns 403 with a body pointing to error 1010 ("the site owner has blocked your browser signature")
+   for a script's default User-Agent, including on the read-only events list. Origin, Referer, client hints (`sec-ch-ua*`) and `Accept-Language` were **not** needed:
+   run E2 sent only `Content-Type`, `Accept` and the Chrome `User-Agent`. An HTTP client that sends no `User-Agent` (as .NET's `HttpClient` does by default) is presumably blocked the same way, so always set one.
+2. **None of these were checked before the capacity test:** the page view, auth check, Pusher/`X-Socket-ID` (absent, real, or fake), `log-interaction`, any cookie (run C sent none), `Origin`, `Referer`.
+3. **That does not prove they are unneeded for an event that has room.** Capacity is very likely checked first (it is the first failure a full event can produce), so the server may
+   validate more after it. The only real proof is an RSVP against an open event, or a capture of one.
+4. The RSVP's rate-limit counter was **shared across separate runs and cookie jars** and fell by 1 per 422. It did not reset over a few minutes. Cloudflare 403s did not count.
+5. `log-interaction` has a separate, much larger limit: `x-ratelimit-remaining` read 1999/2000 and 1998/2000 on two consecutive calls.
+6. Five of the 10 RSVP requests in this window were spent on the tests. Sending the tests again soon would risk a 429.
+
+Consequences for `scripts/VowTickets.cs`: the User-Agent stays a known constant that must not be dropped; the browser-mimicking steps stay behind `--analytics`
+(not proven required, not proven unnecessary); pass `--analytics` when a real registration matters and you want to copy the browser as closely as possible.
 
 ## 8. Data limitations
 
@@ -519,6 +553,8 @@ in the sense that no API call needs a value from it, but the following was obser
 - The backend could, in principle, ask FullStory's server API whether that session has a real recording
   (mouse movement, typing) and treat a missing or thin one as a bot. Nothing in the capture shows it does. A
   server-to-server call would be invisible to the client, and FullStory is not a bot-detection product.
+- Partial result (7.6): RSVPs sent with no cookies at all, so no `fs_uid`, and with no FullStory traffic still got the normal "event is full" answer, not a bot rejection.
+  A full event may be refused before any bot check would run, so this weakens the idea but does not rule it out for an event with room.
 - Test idea: replay the flow with and without FullStory cookies and see whether the RSVP response differs.
   While events are full both return 422, so this only produces a clear signal when a show is open.
 
