@@ -23,6 +23,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+DateTime scriptStart = DateTime.Now;
+
 var JsonOptions = new JsonSerializerOptions {
 	PropertyNameCaseInsensitive = true,
 	DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -33,6 +35,7 @@ const string ForSNL = "forSNL";
 UserConfig[] configs = [
 	// SNL
 	new UserConfig {
+		ConfigName = "SNL-DRESS",
 		SeriesId = "B9KIOO7ZIQF",	// snl
 		Show = "dress",				// event selector
 		FirstName = "Christopher",
@@ -44,8 +47,9 @@ UserConfig[] configs = [
 	},
 	// Ice-Cream
 	new UserConfig {
+		ConfigName = "Ice Cream - Pie (Test)",
 		SeriesId = "UZJLSRJUNZC",	// ice cream
-		Show = "dress",				// event selector
+		Show = "Pie",				// event selector
 		FirstName = "Christopher",
 		LastName = "Rettig",
 		Email = "rettigcd@gmail.com",
@@ -133,6 +137,13 @@ using var handler = new HttpClientHandler {
 using var http = new HttpClient(handler);
 context.Http = http;
 
+var logItems = new List<string>();
+// void Log(string s){ logItems.Add(s); }
+void LogLn(string s){ logItems.Add(s); logItems.Add("\r\n"); }
+LogLn($"{scriptStart:yyyy-MM-dd HH:mm:ss.fff} SCRIPT STARTED");
+// Set by Step1_WithRetry for each attempt; flows down to the send methods so their log entries can name the attempt.
+var currentAttempt = new AsyncLocal<int?>();
+
 try {
 	await Step1_WithRetry(context);
 
@@ -194,6 +205,14 @@ catch (Exception ex) {
 	Console.Error.WriteLine($"FAILED: {ex.Message}");
 	return 1;
 }
+finally {
+	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} SCRIPT COMPLETE");
+
+	string logPath = $"qudini_{scriptStart:yyyy-MM-dd_HH-mm-ss}.log";
+	lock (logItems)	// canceled step 1 attempts may still be logging
+		File.WriteAllText(logPath, string.Concat(logItems));
+	Console.WriteLine($"Log written to {Path.GetFullPath(logPath)}");
+}
 
 // ==================================
 // ======= Wait until Run Time ======
@@ -248,6 +267,7 @@ async Task Step1_WithRetry(Context context, int intervalMs = 500, int timeLimitM
 	int attemptNumber = 0;
 
 	async Task<(int, TimeSpan, Exception?)> Attempt(int number) {
+		currentAttempt.Value = number;	// only visible within this attempt
 		var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 		try {
 			await Step1_GetBookingPage(context);
@@ -444,10 +464,82 @@ HttpRequestMessage JsonPost(string url, string json) {
 	return request;
 }
 
+// Logs the request (timestamp, id, step, attempt, method, url, headers, body) as one entry.
+// The caller creates the id so it can also log the response under the same id.
+async Task LogRequestAsync(Guid requestId, string label, HttpRequestMessage request) {
+	string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+	var headers = request.Headers.Concat(request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>())
+		.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}");
+	string body = request.Content == null ? "" : await request.Content.ReadAsStringAsync();
+
+	var entry = new StringBuilder();
+	string attempt = currentAttempt.Value is int number ? $", attempt {number}" : "";
+	entry.AppendLine($"{timestamp} REQUEST {requestId} [{label}{attempt}]");
+	entry.AppendLine($"{request.Method} {request.RequestUri}");
+	foreach (string header in headers)
+		entry.AppendLine(header);
+	// The handler adds the Cookie header after this point, so read what it will send from the jar.
+	string cookies = context.CookieJar.GetCookieHeader(request.RequestUri!);
+	entry.AppendLine($"Cookie: {(cookies == "" ? "(none)" : cookies)}");
+	entry.AppendLine();
+	entry.Append(body);
+	lock (logItems)	// step 1 attempts run concurrently
+		LogLn(entry.ToString());
+}
+
+// Logs the response (timestamp, id, elapsed, status, headers, body) as one entry, under the id its request was logged with.
+void LogResponse(Guid requestId, TimeSpan elapsed, HttpResponseMessage response, string body) {
+	string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+	var headers = response.Headers.Concat(response.Content.Headers)
+		.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}");
+
+	var entry = new StringBuilder();
+	entry.AppendLine($"{timestamp} RESPONSE {requestId} after {elapsed.TotalMilliseconds:N0} ms");
+	entry.AppendLine($"{(int)response.StatusCode} {response.StatusCode}");
+	foreach (string header in headers)
+		entry.AppendLine(header);
+	entry.AppendLine();
+	entry.Append(body);
+	lock (logItems)	// step 1 attempts run concurrently
+		LogLn(entry.ToString());
+}
+
+// Logs a request that got no response (timeout, network error, or canceled as a step 1 loser),
+// under the id its request was logged with.
+void LogNoResponse(Guid requestId, TimeSpan elapsed, Exception ex) {
+	string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+	string reason = ex switch {
+		TaskCanceledException { InnerException: TimeoutException } => "timed out",
+		OperationCanceledException => "canceled",
+		_ => "failed",
+	};
+
+	var entry = new StringBuilder();
+	entry.AppendLine($"{timestamp} NO RESPONSE {requestId} after {elapsed.TotalMilliseconds:N0} ms");
+	entry.AppendLine(reason);
+	for (Exception? e = ex; e != null; e = e.InnerException)
+		entry.AppendLine($"{e.GetType().Name}: {e.Message}");
+	lock (logItems)	// step 1 attempts run concurrently
+		LogLn(entry.ToString());
+}
+
 // Sends the request, prints one line, and returns the response body. Any non-2xx status throws.
 async Task<string> SendAsync(string label, HttpRequestMessage request) {
-	using var response = await http.SendAsync(request);
-	string body = await response.Content.ReadAsStringAsync();
+	Guid requestId = Guid.NewGuid();
+	await LogRequestAsync(requestId, label, request);
+	var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+	HttpResponseMessage response;
+	string body;
+	try {
+		response = await http.SendAsync(request);
+		body = await response.Content.ReadAsStringAsync();
+	}
+	catch (Exception ex) {
+		LogNoResponse(requestId, stopwatch.Elapsed, ex);
+		throw;
+	}
+	using var responseScope = response;
+	LogResponse(requestId, stopwatch.Elapsed, response, body);
 	Console.WriteLine($"{label}: {request.Method} {request.RequestUri!.AbsolutePath} -> {(int)response.StatusCode}");
 	if (response.IsSuccessStatusCode)
 		return body;
@@ -466,8 +558,21 @@ async Task PostAnalyticsAsync(string label, params ClickAnalyticsEvent[] events)
 }
 
 async Task SendOptionalAsync(string label, HttpRequestMessage request) {
-	using var response = await http.SendAsync(request);
-	string body = await response.Content.ReadAsStringAsync();
+	Guid requestId = Guid.NewGuid();
+	await LogRequestAsync(requestId, label, request);
+	var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+	HttpResponseMessage response;
+	string body;
+	try {
+		response = await http.SendAsync(request);
+		body = await response.Content.ReadAsStringAsync();
+	}
+	catch (Exception ex) {
+		LogNoResponse(requestId, stopwatch.Elapsed, ex);
+		throw;
+	}
+	using var responseScope = response;
+	LogResponse(requestId, stopwatch.Elapsed, response, body);
 	Console.WriteLine($"{label}: {request.Method} {request.RequestUri!.AbsolutePath} -> {(int)response.StatusCode}");
 	if (response.IsSuccessStatusCode)
 		return;
@@ -477,6 +582,7 @@ async Task SendOptionalAsync(string label, HttpRequestMessage request) {
 }
 
 public sealed class UserConfig {
+	public string ConfigName {get; set; } = ""; // display only
 	public string SeriesId { get; set; } = "";
 	public string Show { get; set; } = ""; // event selector
 	public string FirstName { get; set; } = "";
@@ -552,7 +658,7 @@ public sealed class Context {
 	public string? BookingReference { get; set; }
 
 	public void InitializeFrom(UserConfig config) {
-		Console.WriteLine($"Using config:\r\n\tseries: {config.SeriesId},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tphone: {config.Phone},\r\n\tgroup size: {config.GroupSize}\r\n");
+		Console.WriteLine($"Using config:\r\n\tconfig: {config.ConfigName},\r\n\tseries: {config.SeriesId},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tphone: {config.Phone},\r\n\tgroup size: {config.GroupSize}\r\n");
 		SeriesId = config.SeriesId;
 		Show = config.Show;
 		FirstName = config.FirstName;
