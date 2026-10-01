@@ -9,7 +9,7 @@
 //                                               [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]
 // Default:  a dry run. The read-only steps are sent (list events, load the journey), then the RSVP request is printed but NOT sent.
 //           Add --submit to send it.
-// --list:   print every event (uuid, start, status, seats, name) after step 1 and stop.
+// --list:   print every event (uuid, start, status, seats, name) after step 1 and stop. Skips the wait for the run time.
 // Choosing: --event picks by uuid; --title picks the first upcoming event whose name contains TEXT (any case);
 //           with neither, the first event that is open, has seats and has not passed is used.
 // --analytics: also send the calls a browser makes that are not proven to be required (page view, auth check, Pusher WebSocket for
@@ -30,7 +30,6 @@
 // Confirm the RSVP success response shape, and then read the booking/confirmation number from it.
 // Confirm whether X-Socket-ID / Pusher / log-interaction / cookies / Origin are required once an event has room (untested; all skipped without --analytics or not enforced when full).
 // Find the rate-limit window (x-ratelimit-limit is 10 per window; see docs/VOW_SNL_FLOW.md 5.4).
-// Log ALL HTTP exchanges.
 
 using System.Net;
 using System.Net.WebSockets;
@@ -64,6 +63,7 @@ var runConfig = new RunConfig();
 Func<VowEvent, bool> available = e => e.IsOpen && e.SlotsAvailable > 0 && !e.HasPassed;
 Func<VowEvent, bool> selector = available;
 DateTime runTime = DateTime.Now;
+DateTime scriptStart = DateTime.Now;
 
 const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config INDEX|--site snl [--analytics] [--submit] [--list] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]";
 for (int i = 0; i < args.Length; i++) {
@@ -127,7 +127,7 @@ if (context.Series == "") {
 }
 
 // ---- wait ----
-if (!WaitUntilRunTime())
+if (!runConfig.ListOnly && !WaitUntilRunTime())
 	return 0;
 
 using var handler = new HttpClientHandler {
@@ -138,6 +138,10 @@ using var handler = new HttpClientHandler {
 using var http = new HttpClient(handler);
 context.Http = http;
 
+var logItems = new List<string>();
+void LogLn(string s){ logItems.Add(s); logItems.Add("\r\n"); }
+LogLn($"{scriptStart:yyyy-MM-dd HH:mm:ss.fff} SCRIPT STARTED");
+
 try {
 	// 1. Which events exist, and are they open? (required)
 	await Step1_GetEventsList(context);
@@ -145,7 +149,7 @@ try {
 	// ---- Exit Ramp ----
 	if (runConfig.ListOnly) {
 		foreach (var e in context.Events)
-			Console.WriteLine($"   {e.Uuid}  {e.StartsAt,-28} {e.Status,-12} {e.SlotsAvailable,4} seats  {e.Name}");
+			Console.WriteLine($"   {e.Uuid} Starts At:{DateTimeOffset.Parse(e.StartsAt):yyyy-MM-dd HH:mm:ss}  {e.Status,-12} {e.SlotsAvailable,4} seats  {e.Name}");
 		return 0;
 	}
 
@@ -202,6 +206,12 @@ catch (Exception ex) {
 }
 finally {
 	context.Pusher?.Dispose();
+
+	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} SCRIPT COMPLETE");
+	string logPath = $"vow_{scriptStart:yyyy-MM-dd_HH-mm-ss}.log";
+	lock (logItems)
+		File.WriteAllText(logPath, string.Concat(logItems));
+	Console.WriteLine($"Log written to {Path.GetFullPath(logPath)}");
 }
 
 // ==================================
@@ -457,10 +467,80 @@ HttpRequestMessage ApiRequest(HttpMethod method, string url, string origin, stri
 	return request;
 }
 
+// Logs the request (timestamp, id, step, method, url, headers, cookies, body) as one entry.
+// The caller creates the id so it can also log the response under the same id.
+async Task LogRequestAsync(Guid requestId, string label, HttpRequestMessage request) {
+	string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+	var headers = request.Headers.Concat(request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>())
+		.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}");
+	string body = request.Content == null ? "" : await request.Content.ReadAsStringAsync();
+
+	var entry = new StringBuilder();
+	entry.AppendLine($"{timestamp} REQUEST {requestId} [{label}]");
+	entry.AppendLine($"{request.Method} {request.RequestUri}");
+	foreach (string header in headers)
+		entry.AppendLine(header);
+	// The handler adds the Cookie header after this point, so read what it will send from the jar.
+	string cookies = context.CookieJar.GetCookieHeader(request.RequestUri!);
+	entry.AppendLine($"Cookie: {(cookies == "" ? "(none)" : cookies)}");
+	entry.AppendLine();
+	entry.Append(body);
+	lock (logItems)
+		LogLn(entry.ToString());
+}
+
+// Logs the response (timestamp, id, elapsed, status, headers, body) as one entry, under the id its request was logged with.
+void LogResponse(Guid requestId, TimeSpan elapsed, HttpResponseMessage response, string body) {
+	string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+	var headers = response.Headers.Concat(response.Content.Headers)
+		.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}");
+
+	var entry = new StringBuilder();
+	entry.AppendLine($"{timestamp} RESPONSE {requestId} after {elapsed.TotalMilliseconds:N0} ms");
+	entry.AppendLine($"{(int)response.StatusCode} {response.StatusCode}");
+	foreach (string header in headers)
+		entry.AppendLine(header);
+	entry.AppendLine();
+	entry.Append(body);
+	lock (logItems)
+		LogLn(entry.ToString());
+}
+
+// Logs a request that got no response (timeout or network error), under the id its request was logged with.
+void LogNoResponse(Guid requestId, TimeSpan elapsed, Exception ex) {
+	string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+	string reason = ex switch {
+		TaskCanceledException { InnerException: TimeoutException } => "timed out",
+		OperationCanceledException => "canceled",
+		_ => "failed",
+	};
+
+	var entry = new StringBuilder();
+	entry.AppendLine($"{timestamp} NO RESPONSE {requestId} after {elapsed.TotalMilliseconds:N0} ms");
+	entry.AppendLine(reason);
+	for (Exception? e = ex; e != null; e = e.InnerException)
+		entry.AppendLine($"{e.GetType().Name}: {e.Message}");
+	lock (logItems)
+		LogLn(entry.ToString());
+}
+
 // Sends the request, prints one line, and returns the reply. Never throws on a status code (the caller decides).
 async Task<Reply> SendAsync(string label, HttpRequestMessage request) {
-	using var response = await http.SendAsync(request);
-	string body = await response.Content.ReadAsStringAsync();
+	Guid requestId = Guid.NewGuid();
+	await LogRequestAsync(requestId, label, request);
+	var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+	HttpResponseMessage response;
+	string body;
+	try {
+		response = await http.SendAsync(request);
+		body = await response.Content.ReadAsStringAsync();
+	}
+	catch (Exception ex) {
+		LogNoResponse(requestId, stopwatch.Elapsed, ex);
+		throw;
+	}
+	using var _ = response;
+	LogResponse(requestId, stopwatch.Elapsed, response, body);
 	string? rateRemaining = response.Headers.TryGetValues("x-ratelimit-remaining", out var rem) ? rem.First() : null;
 	string? rateLimit = response.Headers.TryGetValues("x-ratelimit-limit", out var lim) ? lim.First() : null;
 	string? retryAfter = response.Headers.TryGetValues("Retry-After", out var retry) ? retry.First() : null;
