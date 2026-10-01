@@ -1,25 +1,33 @@
 #:property PublishAot=false
 // Signs up for SNL Standby tickets through the vow.app registration site (which replaced the Qudini booking widget).
-// It sends the same API calls a browser sends: the steps that are known to be needed, plus (with --analytics) browser-mimicking steps
-// that are NOT proven required. Which steps are needed was tested on 2026-09-24 against a full event; see "What was tested" below.
+// It sends the same API calls a browser sends. --mode picks how much of the browser's flow is copied, because which steps the
+// server needs is NOT known. Which steps are needed was tested on 2026-09-24 against a full event; see "What was tested" below.
 // Everything here is based on the captures saz/snl_sep_24/snl_sep_24_part_1.saz and snl_sep_24_part_2.saz,
 // documented in docs/VOW_SNL_FLOW.md (read it first; section numbers below refer to it).
 //
-// Run:      dotnet run scripts/VowTickets.cs -- [--config INDEX | --site snl] [--analytics] [--submit] [--list]
+// Run:      dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait]
 //                                               [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]
-// Default:  a dry run. The read-only steps are sent (list events, load the journey), then the RSVP request is printed but NOT sent.
-//           Add --submit to send it.
+// --config: REQUIRED. The JSON file with the attendee and show (see UserConfig; example: credentials/dean.json). The .json suffix is
+//           optional, and a bare name is also looked for in the credentials/ folder (git-ignored: these files hold personal data).
+//           --title, --event, --group-size and --series override the file, in any order.
+// Default:  a dry run in mode 2. The steps before the RSVP are sent, then the RSVP request is printed but NOT sent. Add --submit to send it.
 // --list:   print every event (uuid, start, status, seats, name) after step 1 and stop. Skips the wait for the run time.
+// --nowait: skip the wait for the run time (Thursday 09:59:59 for SNL configs) and start right away.
 // Choosing: --event picks by uuid; --title picks the first upcoming event whose name contains TEXT (any case);
 //           with neither, the first event that is open, has seats and has not passed is used.
-// --analytics: also send the calls a browser makes that are not proven to be required (page view, auth check, Pusher WebSocket for
-//           the X-Socket-ID header, log-interaction). Skipping them is untested against an event that has room (see below); when a real
-//           registration is at stake and you want to copy the browser as closely as possible, pass --analytics.
+// --mode:   what is sent once the event is open (all modes first poll the events list until it is open):
+//           1 (or min, minimal) = just the RSVP. Fastest; plus_ones is not checked against the journey's limit (assumed 1, as seen 2026-09-24 and 2026-10-01).
+//           2 (or partial) = load the journey (load-for-visitor), then the RSVP. (default)
+//           3 (or full) = copy the browser: page view (not waited for), auth check, load the journey, Pusher WebSocket (for X-Socket-ID),
+//               log-interaction for the landing page and the Continue click, the RSVP, then log-interaction for the result.
+//           Whether modes 1 and 2 are enough is untested against an event that has room (see below).
+//           Mode 3 sends every call after the event opens, in the browser's order. The auth check and the Pusher connection do not
+//           depend on the event, so they COULD be sent during the polling to save time at the opening; see steps 3 and 5.
 // --series: the vow.app "by-url" slug that lists the events. SNL is "nbc". (Qudini's series id has no equivalent.)
 // Note:     --submit registers with the data in the config and takes a real spot. Use it only when that is what you want.
 //
 // What was tested (2026-09-24, both events full, RSVP sent with placeholder data; docs/VOW_SNL_FLOW.md 7.6):
-//   The RSVP got the same answer, 422 "This event is full", with: no --analytics; --analytics; no cookies at all; a made-up X-Socket-ID;
+//   The RSVP got the same answer, 422 "This event is full", with: mode 2; mode 3; no cookies at all; a made-up X-Socket-ID;
 //   and no Origin/Referer. So none of those is checked BEFORE the capacity check. This does not show they are unchecked for an event with room.
 //   A browser User-Agent IS required: Cloudflare answers any request with a script's default User-Agent with 403 "Error 1010" (all api.vow.app endpoints).
 //
@@ -28,7 +36,7 @@
 
 // ==== TODO ====
 // Confirm the RSVP success response shape, and then read the booking/confirmation number from it.
-// Confirm whether X-Socket-ID / Pusher / log-interaction / cookies / Origin are required once an event has room (untested; all skipped without --analytics or not enforced when full).
+// Confirm whether X-Socket-ID / Pusher / log-interaction / cookies / Origin are required once an event has room (untested; all skipped below mode 3 or not enforced when full).
 // Find the rate-limit window (x-ratelimit-limit is 10 per window; see docs/VOW_SNL_FLOW.md 5.4).
 
 using System.Net;
@@ -44,20 +52,6 @@ var JsonOptions = new JsonSerializerOptions {
 
 const string ForSNL = "forSNL";
 
-// The user data below is placeholder data. Replace it before using --submit.
-UserConfig[] configs = [
-	// SNL
-	new UserConfig {
-		Series = Vow.SnlSlug,
-		Show = "dress",				// event selector (part of the event name)
-		FirstName = "Test",
-		LastName = "Dummy",
-		Email = "test.dummy@example.com",
-		GroupSize = 1,
-		RunAt = ForSNL,
-	},
-];
-
 var context = new Context();
 var runConfig = new RunConfig();
 Func<VowEvent, bool> available = e => e.IsOpen && e.SlotsAvailable > 0 && !e.HasPassed;
@@ -65,52 +59,51 @@ Func<VowEvent, bool> selector = available;
 DateTime runTime = DateTime.Now;
 DateTime scriptStart = DateTime.Now;
 
-const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config INDEX|--site snl [--analytics] [--submit] [--list] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]";
+const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]";
+string? configArg = null;
+string? seriesOverride = null;
+int? groupSizeOverride = null;
+Func<VowEvent, bool>? selectorOverride = null;
 for (int i = 0; i < args.Length; i++) {
 	switch (args[i]) {
 
-		// series selection - selects which vow.app event list to read.
-		case "--config" when i + 1 < args.Length: {
-			if (!int.TryParse(args[++i], out int configIndex) || configIndex < 0 || configIndex >= configs.Length) {
-				Console.Error.WriteLine($"Unknown config index. Use a value from 0 to {configs.Length - 1}.");
-				Console.Error.WriteLine(Usage);
-				return 2;
-			}
-			var config = configs[configIndex];
-			// User Info / Group Size
-			context.InitializeFrom(config);
-			// Show Selector
-			selector = e => e.Name.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
-			// Run At
-			if (config.RunAt == ForSNL)
-				runTime = GetNextThursday10Am(500);
-			break;
-		}
-		case "--site" when i + 1 < args.Length: {
-			string siteName = args[++i].ToLowerInvariant();
-			context.Series = siteName switch { "snl" => Vow.SnlSlug, _ => "" };
-			break;
-		}
-		case "--series" when i + 1 < args.Length: context.Series = args[++i]; break;
+		// attendee + show file (required; applied after all arguments are read, so the overrides below win)
+		case "--config" when i + 1 < args.Length: configArg = args[++i]; break;
+		case "--series" when i + 1 < args.Length: seriesOverride = args[++i]; break;
 
 		// event selection
 		case "--event" when i + 1 < args.Length: {
 			string eventUuid = args[++i];
-			selector = e => string.Equals(e.Uuid, eventUuid, StringComparison.OrdinalIgnoreCase);
+			selectorOverride = e => string.Equals(e.Uuid, eventUuid, StringComparison.OrdinalIgnoreCase);
 			break;
 		}
 		case "--title" when i + 1 < args.Length: {
 			string titleText = args[++i];
-			selector = e => e.Name.Contains(titleText, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
+			selectorOverride = e => e.Name.Contains(titleText, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
 			break;
 		}
 
 		// config options
-		case "--analytics": runConfig.Analytics = true; break;
+		case "--mode" when i + 1 < args.Length: {
+			int mode = args[++i].ToLowerInvariant() switch {
+				"1" or "min" or "minimal" => 1,
+				"2" or "partial" => 2,
+				"3" or "full" => 3,
+				_ => 0,
+			};
+			if (mode == 0) {
+				Console.Error.WriteLine("--mode must be 1|min|minimal, 2|partial or 3|full.");
+				Console.Error.WriteLine(Usage);
+				return 2;
+			}
+			runConfig.Mode = mode;
+			break;
+		}
 		case "--submit": runConfig.Submit = true; break;
 		case "--list": runConfig.ListOnly = true; break;
+		case "--nowait": runConfig.Wait = false; break;
 		// user form info
-		case "--group-size" when i + 1 < args.Length: context.GroupSize = int.Parse(args[++i]); break;
+		case "--group-size" when i + 1 < args.Length: groupSizeOverride = int.Parse(args[++i]); break;
 
 		default:
 			Console.Error.WriteLine($"Unknown or incomplete argument: {args[i]}");
@@ -119,21 +112,63 @@ for (int i = 0; i < args.Length; i++) {
 	}
 }
 
+// ---- Load the config file, then apply the command-line overrides. ----
+if (configArg == null) {
+	Console.Error.WriteLine("Missing --config FILE (the JSON file with the attendee and show, e.g. credentials/dean.json).");
+	Console.Error.WriteLine(Usage);
+	return 2;
+}
+string? configPath = FindConfigFile(configArg);
+if (configPath == null) {
+	Console.Error.WriteLine($"Config file not found: {configArg} (also tried with .json, and in the credentials folder).");
+	return 2;
+}
+UserConfig config;
+try {
+	config = JsonSerializer.Deserialize<UserConfig>(File.ReadAllText(configPath), JsonOptions)
+		?? throw new InvalidOperationException("the file is empty");
+}
+catch (Exception ex) {
+	Console.Error.WriteLine($"Could not read {configPath}: {ex.Message}");
+	return 2;
+}
+Console.WriteLine($"Config file: {Path.GetFullPath(configPath)}");
+context.InitializeFrom(config);
+selector = e => e.Name.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
+if (config.RunAt == ForSNL)
+	runTime = GetNextThursday10Am(-1000);	// 09:59:59: the first request (and its connection setup) happens before the opening; the polling catches it
+if (seriesOverride != null) context.Series = seriesOverride;
+if (groupSizeOverride != null) context.GroupSize = groupSizeOverride.Value;
+if (selectorOverride != null) selector = selectorOverride;
+
 if (context.Series == "") {
-	Console.Error.WriteLine("Missing or unknown --site (use snl).");
-	Console.Error.WriteLine("OR --series [slug].");
+	Console.Error.WriteLine("No series: set \"Series\" in the config file (SNL is \"nbc\") or pass --series SLUG.");
 	Console.Error.WriteLine(Usage);
 	return 2;
 }
 
-// ---- wait ----
-if (!runConfig.ListOnly && !WaitUntilRunTime())
-	return 0;
+// Control-C during the wait (WaitUntilRunTime) or the polling (Step1b_PollUntilOpen) stops cleanly, so the log is still written.
+// Outside those two, Control-C keeps its default behavior (the process ends at once) so it can always interrupt a stuck call.
+var stop = new CancellationTokenSource();
+bool ctrlCStopsCleanly = false;
+Console.CancelKeyPress += (_, eventArgs) => {
+	if (!ctrlCStopsCleanly) return;
+	eventArgs.Cancel = true;
+	stop.Cancel();
+	Console.WriteLine("\nCancelled. Exiting.");
+};
 
+// ONE connection per host, using HTTP/2 (requests ask for it; see ApiRequest). HTTP/2 multiplexes, so the overlapping polls and
+// the RSVP all share the connection the first request opened (at 09:59:59) and never pay for opening a new one.
+// Tested 2026-10-01: api.vow.app (Cloudflare) answers HTTP/2; 4 concurrent polls on one connection took 88-161 ms each.
+// .NET opens a single HTTP/2 connection per host by default (SocketsHttpHandler.EnableMultipleHttp2Connections = false);
+// MaxConnectionsPerServer = 1 keeps it to one connection if the server ever falls back to HTTP/1.1 (overlapping polls then queue).
+// UNTESTED for the RSVP: every RSVP so far (the 2026-09-24 script tests, the 2026-10-01 capture through Fiddler) was HTTP/1.1. HTTP/2 is what Chrome uses.
 using var handler = new HttpClientHandler {
 	CookieContainer = context.CookieJar,
 	UseCookies = true,
 	AutomaticDecompression = DecompressionMethods.All,
+	MaxConnectionsPerServer = 1,
 };
 using var http = new HttpClient(handler);
 context.Http = http;
@@ -141,8 +176,15 @@ context.Http = http;
 var logItems = new List<string>();
 void LogLn(string s){ logItems.Add(s); logItems.Add("\r\n"); }
 LogLn($"{scriptStart:yyyy-MM-dd HH:mm:ss.fff} SCRIPT STARTED");
+// The page view (step 2) is not awaited where it is sent; it is awaited at the end so its response still gets logged.
+Task? pageView = null;
 
 try {
+	// ---- wait ----
+	// Inside the try so that stopping here still writes the log (in finally).
+	if (runConfig.Wait && !WaitUntilRunTime())
+		return 0;
+
 	// 1. Which events exist, and are they open? (required)
 	await Step1_GetEventsList(context);
 
@@ -158,23 +200,33 @@ try {
 		= context.Events.Where(selector).FirstOrDefault()	// the one we want
 		?? context.Events.Where(available).FirstOrDefault()	// fallback if desired one is unavailable
 		?? throw new InvalidOperationException("No matching event is open with seats available. Use --list to see the events.");
+
+	// Before it opens, the list omits journey_id (and capacity, register_url, ...), so poll until it appears.
+	if (context.SelectedEvent.Status == "closed" && context.SelectedEvent.JourneyId == 0)
+		throw new InvalidOperationException($"\"{context.SelectedEvent.Name}\" is closed. Nothing to wait for.");
+	if (context.SelectedEvent.JourneyId == 0)
+		await Step1b_PollUntilOpen(context);
+
 	Console.ForegroundColor = ConsoleColor.Green;
 	Console.Write($"   Selected Event: \"{context.SelectedEvent.Name}\" on {context.SelectedEvent.StartsAt}, status {context.SelectedEvent.Status}, {context.SelectedEvent.SlotsAvailable} seats ");
 	Console.ResetColor();
 	Console.WriteLine($"(uuid {context.SelectedEvent.Uuid} journey {context.SelectedEvent.JourneyId})");
+	Console.WriteLine($"   mode {runConfig.Mode}: {runConfig.Mode switch { 1 => "just the RSVP", 2 => "load the journey, then the RSVP", _ => "copy the browser" }}");
 
-	// 2-3. What the browser does when the registration page opens. (browser-mimicking; not proven required)
-	if (runConfig.Analytics) {
-		await Step2_OpenRegistrationPage(context);
-		await Step3_CheckAuthUser(context);
+	// 2-3. What the browser does when the registration page opens. (mode 3 only; not proven required)
+	// The page view is HTML from go.vow.app that the API cannot see, so nothing waits for it (it runs alongside the calls below).
+	if (runConfig.Mode == 3) {
+		pageView = Step2_OpenRegistrationPage(context);
+		await Step3_CheckAuthUser(context);		// possible early call (see the step)
 	}
 
-	// 4. Load the journey: sets the cookies and gives the step/action ids and the guest limit. (required)
-	await Step4_LoadJourney(context);
+	// 4. Load the journey: sets the cookies and gives the step/action ids and the guest limit. (modes 2 and 3; not proven required)
+	if (runConfig.Mode >= 2)
+		await Step4_LoadJourney(context);
 
-	// 5-7. Pusher connection and the "visitor clicked through the landing page" calls. (browser-mimicking; not proven required)
-	if (runConfig.Analytics) {
-		await Step5_ConnectPusher(context);
+	// 5-7. Pusher connection and the "visitor clicked through the landing page" calls. (mode 3 only; not proven required)
+	if (runConfig.Mode == 3) {
+		await Step5_ConnectPusher(context);		// possible early call (see the step)
 		await Step6_LogLandingView(context);
 		await Step7_LogContinueClick(context);
 	}
@@ -194,10 +246,14 @@ try {
 	// 8. Register. (required)
 	await Step8_SubmitRsvp(context);
 
-	// 9. Tell the server which step we ended on. (browser-mimicking; not proven required)
-	if (runConfig.Analytics)
+	// 9. Tell the server which step we ended on. (mode 3 only; not proven required)
+	if (runConfig.Mode == 3)
 		await Step9_LogRsvpResult(context);
 
+	return 0;
+}
+catch (OperationCanceledException) when (stop.IsCancellationRequested) {
+	// Control-C while polling (the message was printed by the handler).
 	return 0;
 }
 catch (Exception ex) {
@@ -205,6 +261,10 @@ catch (Exception ex) {
 	return 1;
 }
 finally {
+	ctrlCStopsCleanly = false;
+	// Give a still-running page view a few seconds to finish so its response is in the log. It never throws (RunOptionalAsync).
+	if (pageView != null && !pageView.IsCompleted)
+		await Task.WhenAny(pageView, Task.Delay(TimeSpan.FromSeconds(10)));
 	context.Pusher?.Dispose();
 
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} SCRIPT COMPLETE");
@@ -229,27 +289,22 @@ bool WaitUntilRunTime() {
 		Console.WriteLine(" Use --submit to ensure submission.\r\n");
 	}
 
-	int stopRequested = 0;
-	Console.CancelKeyPress += (_, eventArgs) => {
-		eventArgs.Cancel = true;
-		Interlocked.Exchange(ref stopRequested, 1);
-		Console.WriteLine("\nCancelled. Exiting.");
-	};
-
+	ctrlCStopsCleanly = true;
 	var redTimeSpan = TimeSpan.FromMinutes(5);
-	while (now < runTime && Volatile.Read(ref stopRequested) == 0) {
+	while (now < runTime && !stop.IsCancellationRequested) {
 		TimeSpan remaining = runTime - now;
 		Console.Write("\rRun In: ");
 		Console.ForegroundColor = remaining < redTimeSpan ? ConsoleColor.Red : ConsoleColor.Green;
 		Console.Write($"{remaining.Days} Days {remaining:hh\\:mm\\:ss}");
 		Console.ResetColor();
 		Console.Write($" at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
-		Thread.Sleep((int)Math.Min(remaining.TotalMilliseconds, 500));
+		stop.Token.WaitHandle.WaitOne((int)Math.Min(remaining.TotalMilliseconds, 500));
 		now = DateTime.Now;
 	}
+	ctrlCStopsCleanly = false;
 	Console.WriteLine();
 
-	return Volatile.Read(ref stopRequested) == 0;
+	return !stop.IsCancellationRequested;
 }
 
 
@@ -260,19 +315,104 @@ bool WaitUntilRunTime() {
 
 async Task Step1_GetEventsList(Context context) {
 	// ---- Step 1: the events list. ----
-	// GET /api/v2/public/by-url/{slug}/events   (docs/VOW_SNL_FLOW.md section 4)
-	// - uuid + journey_id identify the event in every later call
-	// - status is "open" | "coming_soon" | "closed" (the front end shows a Register button only for "open")
-	// - capacity - attending_count = seats left
+	// GET /api/v2/public/by-url/{slug}/events   (docs/VOW_SNL_FLOW.md sections 4 and 11.2)
+	// - uuid identifies the event in every later call; the journey id comes from register_url (see ParseEvents)
+	// - status is "coming_soon" -> "open" -> "closed" (the front end shows a Register button only for "open")
 	// The browser also sends X-Socket-ID here, but it has no socket yet on the first call ("undefined" was sent and accepted).
 	// Read-only, so it is retried on a 5xx or network failure.
-	string json = await SendWithRetryAsync("1. get events list",
-		() => ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/public/by-url/{context.Series}/events", Vow.ProOrigin, accept: "application/json, text/plain, */*"));
+	string json = await SendWithRetryAsync("1. get events list", EventsListRequest);
+	context.Events = ParseEvents(json);
+}
+
+HttpRequestMessage EventsListRequest() =>
+	ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/public/by-url/{context.Series}/events", Vow.ProOrigin, accept: "application/json, text/plain, */*");
+
+List<VowEvent> ParseEvents(string json) {
 	EventsResponse response = JsonSerializer.Deserialize<EventsResponse>(json, JsonOptions)
 		?? throw new InvalidOperationException("Events response was empty.");
-	context.Events = response.Events
+	var events = response.Events
 		.OrderBy(e => DateTimeOffset.Parse(e.StartsAt))
 		.ToList();
+	// Seen 2026-10-01 (saz/vow/snl_oct_01): once open, the list has status and register_url but NO journey_id,
+	// so take the journey id from the end of register_url (.../journeys/{journey_id}).
+	foreach (var e in events)
+		if (e.JourneyId == 0 && e.RegisterUrl != null && int.TryParse(e.RegisterUrl.TrimEnd('/').Split('/')[^1], out int journeyId))
+			e.JourneyId = journeyId;
+	return events;
+}
+
+async Task Step1b_PollUntilOpen(Context context, int intervalMs = 250, int maxInFlight = 4, int timeLimitMinutes = 15) {
+	// ---- Step 1b: wait for the selected event to open. ----
+	// Seen 2026-10-01 at 09:46: while "coming_soon", each event has only uuid, name, starts_at, theme and status.
+	// journey_id is needed for every later call, so re-read the list until the selected event has one (taken from register_url; see ParseEvents).
+	// In the 2026-10-01 log the show was already open at 10:00:00.5, and the Dress Rehearsal was full by about 10:00:41.
+	//
+	// Polls OVERLAP: a new one starts every intervalMs even if earlier ones have not answered, up to maxInFlight at once.
+	// So one slow response (the browser saw 2.2 s on this call at 10:00:12 on 2026-10-01) cannot hide the opening; the first
+	// response that shows the event open wins. The list endpoint showed no rate limit (2,619 polls at ~3/s on 2026-10-01).
+	// Each poll is a single attempt (no retry): a failure is logged and the next poll is already on its way.
+	string uuid = context.SelectedEvent!.Uuid;
+	var deadline = DateTime.Now.AddMinutes(timeLimitMinutes);
+	int polls = 0;
+	WriteWarning($"\"{context.SelectedEvent.Name}\" is {context.SelectedEvent.Status} (no journey id yet). Polling every {intervalMs} ms "
+		+ $"(up to {maxInFlight} at once) for up to {timeLimitMinutes} minutes (Control-C to exit).");
+
+	async Task<(int Number, List<VowEvent>? Events)> PollOnceAsync(int number) {
+		try {
+			string json = Require(await SendAsync($"1b. poll {number}", EventsListRequest())).Body;
+			return (number, ParseEvents(json));
+		}
+		catch (Exception ex) {
+			Console.WriteLine($"   poll {number} failed ({Excerpt(ex.Message, 200)}); the others continue");
+			return (number, null);
+		}
+	}
+
+	// Control-C stops the polling with an OperationCanceledException (caught in the main block, which writes the log).
+	// Polls still in flight when this returns are abandoned; they finish on their own and are still logged.
+	ctrlCStopsCleanly = true;
+	var cancelled = Task.Delay(Timeout.Infinite, stop.Token);
+	var inFlight = new List<Task<(int Number, List<VowEvent>? Events)>>();
+	var nextStart = DateTime.Now.AddMilliseconds(intervalMs);
+	try {
+		while (true) {
+			if (DateTime.Now > deadline)
+				throw new InvalidOperationException($"The event did not open within {timeLimitMinutes} minutes ({polls} polls).");
+
+			if (inFlight.Count < maxInFlight && DateTime.Now >= nextStart) {
+				inFlight.Add(PollOnceAsync(++polls));
+				nextStart = DateTime.Now.AddMilliseconds(intervalMs);
+			}
+
+			// Wake for whichever comes first: a poll answering, the time to start the next poll (only if there is room), or Control-C.
+			var waitFor = new List<Task>(inFlight) { cancelled };
+			if (inFlight.Count < maxInFlight)
+				waitFor.Add(Task.Delay(Math.Max(1, (int)(nextStart - DateTime.Now).TotalMilliseconds)));
+			await Task.WhenAny(waitFor);
+			stop.Token.ThrowIfCancellationRequested();
+
+			foreach (var done in inFlight.Where(t => t.IsCompleted).ToList()) {
+				inFlight.Remove(done);
+				var (number, events) = done.Result;
+				if (events == null) continue;	// failed; already reported
+				VowEvent? current = events.FirstOrDefault(e => e.Uuid == uuid);
+				if (current == null)
+					throw new InvalidOperationException($"The selected event {uuid} is no longer in the list.");
+				// After registration ends (seen 2026-10-01 at 10:02:29) the status is "closed" and register_url is gone again; it does not reopen.
+				if (current.Status == "closed")
+					throw new InvalidOperationException($"\"{current.Name}\" is closed. Nothing to wait for.");
+				if (current.JourneyId != 0) {
+					context.Events = events;
+					context.SelectedEvent = current;
+					Console.WriteLine($"   open in poll {number} (of {polls} started): status {current.Status}, journey {current.JourneyId}");
+					return;
+				}
+			}
+		}
+	}
+	finally {
+		ctrlCStopsCleanly = false;
+	}
 }
 
 async Task Step4_LoadJourney(Context context) {
@@ -333,14 +473,16 @@ async Task Step8_SubmitRsvp(Context context) {
 // =======================================
 // Calls the browser makes that no captured call is known to depend on. That does NOT mean they are unnecessary: on 2026-09-24 the RSVP gave
 // the same "event is full" answer with or without them, but only a full event was available to test against.
-// Sent only with --analytics; a failure is logged and ignored.
+// Sent only in mode 3; a failure is logged and ignored.
 
 async Task Step2_OpenRegistrationPage(Context context) {
 	// ---- Step 2: open the registration page (the register_url the Register button links to). ----
 	// GET https://go.vow.app/event/{uuid}/journeys/{journey_id}  -> the Nuxt single-page-app shell. Only load balancer cookies are set.
 	VowEvent selected = context.SelectedEvent!;
 	await RunOptionalAsync("2. open registration page", async () => {
-		var request = new HttpRequestMessage(HttpMethod.Get, $"{Vow.GoOrigin}/event/{selected.Uuid}/journeys/{selected.JourneyId}");
+		var request = new HttpRequestMessage(HttpMethod.Get, $"{Vow.GoOrigin}/event/{selected.Uuid}/journeys/{selected.JourneyId}") {
+			Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+		};
 		AddBrowserHeaders(request);
 		request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/apng,*/*;q=0.8");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
@@ -354,6 +496,9 @@ async Task Step2_OpenRegistrationPage(Context context) {
 async Task Step3_CheckAuthUser(Context context) {
 	// ---- Step 3: ask who is logged in. ----
 	// GET /api/auth/user -> 401 {"message":"Unauthenticated."} for an anonymous visitor. That is the expected answer here.
+	// POSSIBLE EARLY CALL: the URL has no event or journey and an anonymous visitor always gets 401, so this could be sent before the
+	// event opens (during the polling). Its only side effect is setting the Laravel cookies, which last 15 days. Kept after the opening
+	// for now because that is the browser's order (a server comparing timestamps could notice the difference). Untested either way.
 	await RunOptionalAsync("3. check auth user", async () => {
 		await SendAsync("3. check auth user (401 expected)", ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/auth/user", Vow.GoOrigin));
 	});
@@ -361,6 +506,11 @@ async Task Step3_CheckAuthUser(Context context) {
 
 async Task Step5_ConnectPusher(Context context) {
 	// ---- Step 5: open the Pusher WebSocket and read the socket id. ----
+	// POSSIBLE EARLY CALL: the socket id comes from Pusher, not vow.app, and has nothing to do with the event, so this could be sent
+	// before the event opens. Catch: Pusher closes the socket after activity_timeout (120 s) without traffic, and this method never
+	// answers keep-alives, so an early connection must be made less than ~2 minutes before the RSVP, or must send {"event":"pusher:ping"}
+	// (and answer pings). Whether the server checks that the id belongs to a live socket is unknown (a made-up id was accepted on a full event).
+	// Kept after the opening for now, in the browser's order.
 	// docs/VOW_SNL_FLOW.md 5.6. The first message from the server is
 	//   {"event":"pusher:connection_established","data":"{\"socket_id\":\"1677674.4468990\",\"activity_timeout\":120}"}
 	// The socket id is sent as X-Socket-ID on the log-interaction and RSVP calls (Laravel uses it to skip the sender when it broadcasts).
@@ -422,13 +572,19 @@ async Task Step9_LogRsvpResult(Context context) {
 // ========  Helpers  ====================
 // =======================================
 
-DateTime GetNextThursday10Am(int msDelay) {
+// Finds the config file: as given, with ".json" added, then the same two in the credentials folder (relative to the current directory).
+string? FindConfigFile(string name) {
+	string withJson = name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? name : name + ".json";
+	string[] candidates = [name, withJson, Path.Combine("credentials", name), Path.Combine("credentials", withJson)];
+	return candidates.FirstOrDefault(File.Exists);
+}
+
+// The next Thursday (today if it is Thursday) at 10:00 local time plus msOffset, which may be negative (start before 10:00).
+DateTime GetNextThursday10Am(int msOffset) {
 	DateTime now = DateTime.Now;
 	int daysFromNow = ((7 + (int)DayOfWeek.Thursday - (int)now.DayOfWeek) % 7);
 	DateTime targetDate = now.Date.AddDays(daysFromNow);
-	int milliseconds = msDelay % 1000;
-	int seconds = (msDelay - milliseconds) / 1000;
-	return targetDate.AddHours(10).AddSeconds(seconds).AddMilliseconds(milliseconds);
+	return targetDate.AddHours(10).AddMilliseconds(msOffset);
 }
 
 void WriteWarning(string message) {
@@ -452,7 +608,8 @@ void AddBrowserHeaders(HttpRequestMessage request) {
 // A cross-origin XHR/fetch to api.vow.app, as the vow.app front ends send it.
 // origin is the front end that makes the call: https://go.vow.app (registration) or https://pro.vow.app (listing).
 HttpRequestMessage ApiRequest(HttpMethod method, string url, string origin, string? json = null, string accept = "application/json", bool useSocketId = false) {
-	var request = new HttpRequestMessage(method, url);
+	// HTTP/2 (falls back to HTTP/1.1 if the server refuses); see the HttpClientHandler setup.
+	var request = new HttpRequestMessage(method, url) { Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower };
 	AddBrowserHeaders(request);
 	request.Headers.Referrer = new Uri(origin + "/");
 	request.Headers.TryAddWithoutValidation("Origin", origin);
@@ -497,7 +654,7 @@ void LogResponse(Guid requestId, TimeSpan elapsed, HttpResponseMessage response,
 
 	var entry = new StringBuilder();
 	entry.AppendLine($"{timestamp} RESPONSE {requestId} after {elapsed.TotalMilliseconds:N0} ms");
-	entry.AppendLine($"{(int)response.StatusCode} {response.StatusCode}");
+	entry.AppendLine($"HTTP/{response.Version} {(int)response.StatusCode} {response.StatusCode}");
 	foreach (string header in headers)
 		entry.AppendLine(header);
 	entry.AppendLine();
@@ -663,7 +820,7 @@ public sealed class Context {
 	// ---- Discovered by step 4 ----
 	public JourneyResponse? Journey { get; set; }
 
-	// ---- Discovered by step 5 (browser-mimicking, --analytics only) ----
+	// ---- Discovered by step 5 (browser-mimicking, mode 3 only) ----
 	public ClientWebSocket? Pusher { get; set; }
 	/// <summary>Pusher socket id, e.g. "1677674.4468990". Null when step 5 was skipped or failed, in which case no X-Socket-ID header is sent.</summary>
 	public string? SocketId { get; set; }
@@ -689,10 +846,14 @@ public sealed class Context {
 
 	/// <summary>
 	/// The RSVP form's "plus_ones" is the number of guests BEYOND the registrant. INFERRED: our GroupSize counts everyone,
-	/// so plus_ones = GroupSize - 1, limited by the RSVP step's options.max_plus_ones (1 in the capture). Not confirmed by a success capture.
+	/// so plus_ones = GroupSize - 1, limited by the RSVP step's options.max_plus_ones. Not confirmed by a success capture.
+	/// In mode 1 the journey is never loaded, so the limit is assumed to be 1 (its value on 2026-09-24 and 2026-10-01).
 	/// </summary>
 	public int GetPlusOnesToRequest() {
-		int maxPlusOnes = Journey?.Journey.Steps.FirstOrDefault(s => s.Type == "rsvp")?.Options?.MaxPlusOnes ?? 0;
+		const int AssumedMaxPlusOnes = 1;
+		int maxPlusOnes = Journey == null
+			? AssumedMaxPlusOnes
+			: Journey.Journey.Steps.FirstOrDefault(s => s.Type == "rsvp")?.Options?.MaxPlusOnes ?? 0;
 		int wanted = Math.Max(GroupSize - 1, 0);
 		if (wanted > maxPlusOnes)
 			Console.WriteLine($"   WARNING: group size {GroupSize} needs {wanted} plus-one(s) but this journey allows {maxPlusOnes}; reduced to fit.");
@@ -723,14 +884,17 @@ public sealed class UserConfig {
 	public string FirstName { get; set; } = "";
 	public string LastName { get; set; } = "";
 	public string Email { get; set; } = "";
-	public int GroupSize = 1;
+	public int GroupSize { get; set; } = 1;
+	/// <summary>"forSNL" = wait until the next Thursday 09:59:59 local time, then poll until the show opens; anything else (or missing) = start at once.</summary>
 	public string? RunAt { get; set; }
 }
 
 public sealed class RunConfig {
-	public bool Analytics { get; set; }
+	/// <summary>1 = just the RSVP, 2 = load the journey then the RSVP, 3 = copy the browser. See the header.</summary>
+	public int Mode { get; set; } = 2;
 	public bool Submit { get; set; }
 	public bool ListOnly { get; set; }
+	public bool Wait { get; set; } = true;
 }
 
 public sealed record Reply(HttpStatusCode Status, string Body, string? RateRemaining, string? RetryAfter) {

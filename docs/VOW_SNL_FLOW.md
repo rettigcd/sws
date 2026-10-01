@@ -10,6 +10,9 @@ after the 10:00 AM ET opening, when both shows were already full.
 - `snl_sep_24_part_1.saz`: the public landing/listing flow (14 exchanges after stripping)
 - `snl_sep_24_part_2.saz`: the registration flow, ending in "Sorry, registration is now closed" (16 exchanges after stripping)
 
+A second week's opening (2026-10-01) was recorded by a browser capture and a script log. What they changed or added is in
+**section 11**; where it contradicts an earlier section, section 11 is newer.
+
 Terminology: as in the rest of this repo, an "exchange" is one HTTP request/response pair.
 Exchange numbers below are those in the **stripped** captures, and were renumbered when
 non-participating exchanges were deleted (part 2's `PUT rsvp` was 28 before stripping, 12 after).
@@ -192,6 +195,10 @@ Observed status was `closed` for both events while `attending_count` exceeded `c
 known whether `closed` here is derived from capacity, from the time window, or both (`closes_at` was
 still an hour away), or what the exact status string is when open. `"open"` and `"coming_soon"`
 are taken from the front-end code, not seen in data.
+
+**Update 2026-10-01 (section 11.2):** `coming_soon` and `open` were both seen. In all three states the list now has only `uuid`,
+`name`, `starts_at`, `theme`, `status` and (only while open) `register_url`. There is no `journey_id`, `capacity`, `attending_count`,
+`opens_at` or `closes_at`; the journey id must be taken from the end of `register_url`.
 
 ---
 
@@ -477,6 +484,10 @@ whereas Qudini's `groupSize` is total people. This mapping (`groupSize` = `plus_
   No CORS preflights are needed from a non-browser client.
 - **Timing matters.** The show was full within minutes (`attending_count` exceeded `capacity` in the capture). Poll the listing just before 10:00 and
   go straight to the RSVP.
+- **Possible early calls.** `GET /api/auth/user` (always 401 for an anonymous visitor, no event in the URL) and the Pusher connection (the socket id
+  comes from Pusher and is not tied to the event) could be sent while polling for the opening, to save time after it. `scripts/VowTickets.cs --mode 3`
+  still sends them after the opening, in the browser's order. If moved earlier: the Pusher socket closes after 120 s without traffic (5.6), so connect
+  less than ~2 minutes before the RSVP or keep it alive with `pusher:ping`. Untested either way.
 - **Rate limit.** The RSVP endpoint reports `x-ratelimit-limit: 10` (Laravel throttle; window and key unknown). Every retry, hedge or duplicate counts against it,
   so any retry mechanism must be designed around that budget. See "Rate limit" in section 5.4.
 - **PII.** The captures contain a real name and email in the RSVP body. Do not commit them.
@@ -487,7 +498,7 @@ whereas Qudini's `groupSize` is total people. This mapping (`groupSize` = `plus_
 2. Whether `X-Socket-ID` must be a real Pusher id (see 5.6). It was sent as the literal string `undefined` on the first listing call and the server still returned 200, so it may not be validated.
 3. Whether `log-interaction` calls and the Pusher connection are required for an event that has room. Not checked for a full event (7.6); untested otherwise.
 4. Whether cookies are required for an event that has room. The listing needs none, and a full event's RSVP ignored their absence (7.6). Untested otherwise.
-5. Exact `status` values in the listing when a show is open or upcoming.
+5. ~~Exact `status` values in the listing when a show is open or upcoming.~~ Resolved 2026-10-01: `coming_soon`, then `open`, then `closed` (section 11.2).
 6. Whether there is any bot detection (see section 9).
 7. Whether `plus_ones` is additional guests (assumed) or total group size.
 
@@ -501,8 +512,8 @@ that thing is checked. Sent from `scripts/VowTickets.cs` (rows A, B) and a scrat
 
 | Run | What was sent | Result | `x-ratelimit-remaining` after |
 |---|---|---|---|
-| B | `VowTickets.cs` default: events list + `load-for-visitor` + RSVP. No `--analytics`, so no `X-Socket-ID`, no page view, no `log-interaction`. Chrome UA, Origin, Referer. | 422 event full | 9 |
-| A | `VowTickets.cs --analytics`: adds page view, auth check, Pusher connect (real socket id), 2 `log-interaction` calls. | 422 event full | 8 |
+| B | `VowTickets.cs` default: events list + `load-for-visitor` + RSVP. Mode 2 (no `--mode`), so no `X-Socket-ID`, no page view, no `log-interaction`. Chrome UA, Origin, Referer. | 422 event full | 9 |
+| A | `VowTickets.cs --mode 3`: adds page view, auth check, Pusher connect (real socket id), 2 `log-interaction` calls. | 422 event full | 8 |
 | C | No cookies at all (no `load-for-visitor`), browser UA, Origin, Referer. | 422 event full | 7 |
 | F | Cookies, made-up `X-Socket-ID: 123456.7890123`. | 422 event full | 6 |
 | E2 | Browser UA only: no cookies, no Origin, no Referer. | 422 event full | 5 |
@@ -522,8 +533,8 @@ Conclusions:
 5. `log-interaction` has a separate, much larger limit: `x-ratelimit-remaining` read 1999/2000 and 1998/2000 on two consecutive calls.
 6. Five of the 10 RSVP requests in this window were spent on the tests. Sending the tests again soon would risk a 429.
 
-Consequences for `scripts/VowTickets.cs`: the User-Agent stays a known constant that must not be dropped; the browser-mimicking steps stay behind `--analytics`
-(not proven required, not proven unnecessary); pass `--analytics` when a real registration matters and you want to copy the browser as closely as possible.
+Consequences for `scripts/VowTickets.cs`: the User-Agent stays a known constant that must not be dropped; the browser-mimicking steps are only sent in `--mode 3`
+(not proven required, not proven unnecessary); use `--mode 3` when a real registration matters and you want to copy the browser as closely as possible.
 
 ## 8. Data limitations
 
@@ -572,3 +583,82 @@ part 2 were first analyzed with all traffic, then non-participating exchanges (s
 in Fiddler and the file re-saved and re-run, so the checked-in captures contain only participating hosts.
 A reasonable check after any new capture: group exchanges by `Request.Host` and confirm only the
 five participating hosts remain.
+
+---
+
+## 11. The 2026-10-01 opening
+
+Two recordings of the second Thursday opening. Times are Eastern (UTC-4) unless marked UTC.
+
+| Source | What it covers |
+|---|---|
+| `saz/vow/snl_oct_01/snl_oct_01.saz` | Browser capture, 09:19 to 10:01. The listing page polling, then a manual registration that got "event is full". **Not stripped**: it also holds unrelated work traffic, and the RSVP body holds a real name and work email. Treat as personal data. |
+| `vow_2026-10-01_09-54-12.log` (repo root, not committed) | `scripts/VowTickets.cs` run that polled the events list every ~340 ms from 10:00:00.524 to 10:15:01 (2,619 requests). That version waited for a `journey_id` field the list never sends (11.2), so it never went on to the RSVP. Fixed since. |
+
+### 11.1 Timeline
+
+| Time | Source | Event |
+|---|---|---|
+| 09:19:33 to 09:59:51 | browser | Listing polls (every 20 s, at times every 60 s): both shows `coming_soon`. Last one at 09:59:51.75. |
+| 10:00:00.524 | script | **First poll: both shows already `open`**, with `register_url`. So registration opened between 09:59:52 and 10:00:00.5, probably at 10:00:00. |
+| 10:00:12 | browser | First browser poll after 10:00: `open`. |
+| 10:00:34.8 | browser | `GET load-for-visitor` sent. The response (Date header 14:00:41 UTC) took about **7 s** and already had `signup_count` 305 of `capacity` 305, `is_over_capacity: true`. The Dress Rehearsal was **full within about 41 s** of opening. |
+| 10:01:00.1 | browser | `PUT rsvp` returned 422 `{"error":"This event is full.","capacity_full":true,"capacity_step_id":6176}`, `x-ratelimit-remaining: 9`. |
+| about 10:02:29.5 to 10:02:29.9 | script | **Both shows changed to `closed` in the same poll interval**, and `register_url` disappeared. |
+| to 10:15:01 | script | Still `closed`. |
+
+### 11.2 The events list by state
+
+| State | Fields present |
+|---|---|
+| `coming_soon` (before 10:00) | `uuid`, `name`, `starts_at`, `theme`, `status` |
+| `open` | the same plus `register_url` (`https://go.vow.app/event/{uuid}/journeys/{journey_id}`) |
+| `closed` (after about 10:02:30) | the same as `coming_soon` |
+
+This differs from the Sep 24 response in section 4, which had `journey_id`, `capacity`, `attending_count`, `opens_at`, `closes_at`,
+`timezone` and `location`. It is not known whether the API changed between the two weeks or the fields depend on something else.
+A script must take the journey id from the end of `register_url`, and cannot read seat counts from the list.
+
+Event list behaviour under load (script log): all 2,619 requests returned 200; median 87 ms, slowest 628 ms (the first request,
+connection setup) and a few of 400 to 490 ms around 10:00:14. No `x-ratelimit-*` headers and no throttling at about 3 requests per
+second. The list stayed fast while `load-for-visitor` took about 7 s, so it is cheap to poll and polling every 250 ms is safe.
+
+`closed` arrived for both shows at the same moment, nearly two minutes after the Dress Rehearsal was full, so it looks like a scheduled
+or manual switch, not an immediate reaction to capacity. **An `open` status does not mean seats are left**; the useful window was
+under a minute.
+
+### 11.3 IDs for this week
+
+| Item | Dress Rehearsal | Live Show |
+|---|---|---|
+| Event uuid | `a082cd50-730a-4ad9-a1d8-c2d1ded4d3fe` | `23b0b0da-4cfe-4054-b211-b22cc2f0e020` |
+| Journey id | 1384 | 1382 |
+| Steps (landing, RSVP, confirmation, closed) | 6173, 6174, 6175, 6176 (`capacity_step_id` 6176) | not captured |
+| `max_plus_ones` | 1 (same as Sep 24) | not captured |
+| Capacity | 305 | not captured |
+| Journey `created_at` | 2026-09-24 18:56:23 UTC (the afternoon of the previous opening) | not captured |
+
+### 11.4 Other observations
+
+- **The browser sent no Laravel cookies to the API.** Its `load-for-visitor` and `PUT rsvp` carried only the `AWSALBCORS` load-balancer cookie
+  (no `vow_session`, `XSRF-TOKEN` or the random-named cookie), against a show that was open when the page loaded. With the Sep 24 no-cookie
+  test (7.6), this is good evidence the RSVP does not need them.
+- **The RSVP request matched section 5.4**: same headers, `X-Socket-ID` set, body
+  `{"rsvp":true,"plus_ones":0,"me":null,"journey":1384,"group_id":null,"first_name":...,"last_name":...,"email":...}`.
+- **The rate-limit counter was back to full a week later**: `x-ratelimit-remaining: 9` after the one RSVP, so the five test requests of Sep 24 had expired.
+- **The registration front end was redeployed.** `go.vow.app` now serves a Nuxt 3-style shell (`data-nuxt-data`, `buildId`), not the Nuxt 2
+  markup in section 2. Its config has `sanctum.mode: "token"` (token auth for logged-in users, not session cookies). The API calls an
+  anonymous visitor makes were unchanged.
+- **The events list now sets the Laravel cookies** (`XSRF-TOKEN`, `vow_session`, a random-named one) on a script's first request.
+  Section 4 described it as cookie-free.
+- **The success response of `PUT rsvp` is still not captured** (open item 7.5.1).
+
+### 11.5 Consequences for `scripts/VowTickets.cs`
+
+- Poll the events list until the chosen show is `open`, take the journey id from `register_url`, and go straight on. Implemented
+  (`Step1b_PollUntilOpen`, `Step1_GetEventsList`).
+- Stop if the show is `closed`: it does not reopen. Implemented.
+- Start polling a few seconds before 10:00. The show was already open at 10:00:00.5, so the exact opening time (and any early opening or
+  local clock error) was not observed. Not implemented yet: the script starts at 10:00:00.5.
+- Spend as little time as possible between seeing `open` and sending the RSVP: the show was full in about 41 s, and `load-for-visitor` alone
+  took about 7 s. This is why `--mode 1` (RSVP only) exists.
