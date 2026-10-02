@@ -2,3 +2,4 @@ saz/**
 obj/
 bin/
 credentials/
+*.log
