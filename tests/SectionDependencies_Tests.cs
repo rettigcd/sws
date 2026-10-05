@@ -11,7 +11,7 @@ using Xunit;
 /// </summary>
 public class SectionDependencies_Tests {
 
-	static readonly string[] AnalysisSections = ["Analysis", "Auth", "AzureB2c", "Automation", "Minimal", "Qudini"];
+	static readonly string[] AnalysisSections = ["Analysis", "Auth", "AzureB2c", "Automation", "Minimal"];
 
 	[Fact]
 	public void Saz_DependsOnNoOtherSection() {
