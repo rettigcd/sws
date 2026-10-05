@@ -182,7 +182,7 @@
 		const colors = { info: '#1f4fd8', ok: '#1a7f37', warn: '#b26a00', error: '#c62828' };
 		bannerEl.style.background = colors[kind] || colors.info;
 		const body = html !== null ? html : esc(text).replace(/\n/g, '<br>');
-		const full = (profileSummaryHtml ? `<div style="margin-bottom:4px">${profileSummaryHtml}</div>` : '') + `<div><span style="opacity:.75">SNL auto:</span> ${body}</div>`;
+		const full = (profileSummaryHtml ? `<div style="margin-bottom:4px">${profileSummaryHtml}</div>` : '') + `<div>${body}</div>`;
 		if (full !== bannerShown) { bannerEl.innerHTML = full; bannerShown = full; }
 	}
 
@@ -383,6 +383,7 @@
 		const show = SHOWS[CONFIG.SHOW];
 		let lastApiCheck = 0;
 		let lastWaitingLog = '';
+		let waitingNote = '';   // the latest poll result, shown under the countdown once the rapid polling has started
 		let ownPoll = true;   // does the script fetch the list itself? Not in mode 2, which relies on the page's own (sped-up) polling
 		let goingTo = null;
 		// The speed-up mode in use. With 'auto' it is decided from what the page offers: during the countdown (so it shows on screen long before
@@ -425,6 +426,30 @@
 			location.assign(url);
 		}
 
+		/** Redraws the status box: the show, the countdown to the open time, the speed-up mode, and what the script is doing. rapid = the rapid polling has
+		 *  started. The countdown runs on in the rapid polling phase, until the open time. Screen only (quiet): the console gets lines when things change. */
+		async function drawStatus(rapid) {
+			if (goingTo) return;   // do not paint over the "is open, opening the registration page" message
+			const msLeft = openAt.getTime() - Date.now();
+			const opensAt = openAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+			const left = formatCountdown(msLeft);
+			const speedupText = speedupDecided ? `mode ${speedup} (${speedupWhy})` : speedupWhy;
+			const modeColor = { 2: '#2e7d32', 1: '#f9a825', 0: '#546e7a' }[speedup];
+			const reached = msLeft <= 0;
+			let doing;   // the last line: what is going on now
+			if (!rapid) doing = `Rapid polling starts ${CONFIG.RAPID_POLL_LEAD_SECONDS} s before opening.`;
+			else if (reached) doing = `Open time reached. ${waitingNote || 'Waiting for the page to show the link...'}`;
+			else doing = `Rapid polling: ${waitingNote || (speedup === 2 ? 'the page refreshes its own list.' : 'asking the list ourselves...')}`;
+			await banner(
+				`"${show.label}" opens ${opensAt}${testOpenAt ? ' (TEST)' : ''}\nCountdown  ${left}\nSpeed-up: ${speedupText}\n${doing}`,
+				'info', true,
+				`<div style="font-size:13px"><b>${esc(show.label)}</b> opens ${esc(opensAt)}${testOpenAt ? ' ' + chip('TEST', '#ffd54f', '#222') : ''}</div>` +
+				`<div style="margin:3px 0"><span style="opacity:.85">Countdown</span> <span style="font:700 26px/1.15 Consolas,monospace;letter-spacing:1px;background:rgba(0,0,0,.28);border-radius:4px;padding:0 8px">${esc(left)}</span>` +
+				`${rapid ? ' ' + chip(reached ? 'OPEN TIME REACHED' : 'RAPID POLLING', reached ? '#2e7d32' : '#b26a00') : ''}</div>` +
+				`<div>Speed-up: ${speedupDecided ? chip('mode ' + speedup, modeColor) + ' <span style="opacity:.85">' + esc(speedupWhy) + '</span>' : '<span style="opacity:.85">' + esc(speedupWhy) + '</span>'}</div>` +
+				`<div style="opacity:.85">${esc(doing)}</div>`);
+		}
+
 		// ---- before the rapid polling: only a countdown on screen (and the cheap look at the page below, which sends nothing) ----
 		const stageStart = Date.now();
 		let lastCapabilityCheck = 0;
@@ -446,17 +471,7 @@
 				lastCountdownLog = Date.now(); 
 				log(`countdown: ${formatCountdown(openAt.getTime() - Date.now())} to the open time`);
 			}
-			const opensAt = openAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
-			const left = formatCountdown(openAt.getTime() - Date.now());
-			const speedupText = speedupDecided ? `mode ${speedup} (${speedupWhy})` : speedupWhy;
-			const modeColor = { 2: '#2e7d32', 1: '#f9a825', 0: '#546e7a' }[speedup];
-			await banner(
-				`"${show.label}" opens ${opensAt}${testOpenAt ? ' (TEST)' : ''}\\nCountdown  ${left}\\nSpeed-up: ${speedupText}\\nRapid polling starts ${CONFIG.RAPID_POLL_LEAD_SECONDS} s before opening.`,
-				'info', true,
-				`<div style="font-size:13px"><b>${esc(show.label)}</b> opens ${esc(opensAt)}${testOpenAt ? ' ' + chip('TEST', '#ffd54f', '#222') : ''}</div>` +
-				`<div style="margin:3px 0"><span style="opacity:.85">Countdown</span> <span style="font:700 26px/1.15 Consolas,monospace;letter-spacing:1px;background:rgba(0,0,0,.28);border-radius:4px;padding:0 8px">${esc(left)}</span></div>` +
-				`<div>Speed-up: ${speedupDecided ? chip('mode ' + speedup, modeColor) + ' <span style="opacity:.85">' + esc(speedupWhy) + '</span>' : '<span style="opacity:.85">' + esc(speedupWhy) + '</span>'}</div>` +
-				`<div style="opacity:.8">Rapid polling starts ${CONFIG.RAPID_POLL_LEAD_SECONDS} s before opening.</div>`);
+			await drawStatus(false);
 			await sleep(250);
 		}
 		if (!goingTo) {
@@ -465,7 +480,8 @@
 				speedup = best.mode; speedupWhy = 'auto: ' + best.why; speedupDecided = true;
 				log(`speed-up auto: mode ${speedup} (${best.why})`);
 			}
-			await banner(`Rapid polling started (speed-up mode ${speedup}). Waiting for "${show.label}" to open...`);
+			log(`Rapid polling started (speed-up mode ${speedup}). Waiting for "${show.label}" to open...`);
+			await drawStatus(true);
 			ownPoll = speedup !== 2;
 			if (speedup === 2) installFastPageTimer().then((ok) => {
 				if (!ok) {   // could not take over the page's timer after all: poll ourselves, with whatever the page still allows
@@ -497,7 +513,7 @@
 					if (!event) {
 						const waiting = `Waiting... no event named like "${show.label}" in the list yet.`;
 						if (waiting !== lastWaitingLog) { lastWaitingLog = waiting; log(waiting); }
-						await banner(waiting, 'info', true);
+						waitingNote = waiting;
 					}
 					else if (event.status === 'open' && event.register_url) {
 						if (speedup === 1) {
@@ -516,12 +532,14 @@
 						go(event.register_url, 'API');
 					}
 					else {
-						const waiting = `Waiting for "${event.name}": status "${event.status}" (${event.attending_count}/${event.capacity}).`;
+						const seats = event.capacity != null ? ` (${event.attending_count}/${event.capacity})` : '';   // the Oct 1 list has no seat counts
+						const waiting = `Waiting for "${event.name}": status "${event.status}"${seats}.`;
 						if (waiting !== lastWaitingLog) { lastWaitingLog = waiting; log(waiting); }   // the console gets a line only when the status changes
-						await banner(`${waiting} Last check ${new Date().toLocaleTimeString()}`, 'info', true);
+						waitingNote = `${waiting} Last check ${new Date().toLocaleTimeString()}`;
 					}
 				} catch (e) { log('list check failed', e); }
 			}
+			if (!goingTo) await drawStatus(true);   // every pass: the countdown keeps running until the open time
 			await sleep(250);
 		}
 		if (!goingTo) await banner(`Gave up after ${CONFIG.GIVE_UP_AFTER_MIN} minutes.`, 'warn');
