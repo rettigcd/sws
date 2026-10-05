@@ -234,6 +234,18 @@ int nextAttendeeId = 900000;
 // Numbers above MaxBookingNumber are not allowed, so after that the RSVP gets the captured "event is full" 422.
 const int MaxBookingNumber = 300;
 int BookingNumberNow() => 1 + 10 * Math.Max(0, (int)(DateTime.UtcNow - OpenAt()).TotalSeconds);
+
+// load-for-visitor (the journey, not yet registered) with the seat numbers on the same clock as the booking number: the next booking number is
+// BookingNumberNow(), so BookingNumberNow() - 1 seats are taken (at most journey.capacity), and the journey is over capacity once the RSVP is sold out
+// (a number above MaxBookingNumber). The captured response was taken after the real show had sold out (capacity 305, signup_count 305,
+// is_over_capacity true, next_registration_sequence_number 303), so without this a call at the open already looked full. Only these three fields change.
+void ApplyBookingClock(JsonObject journey) {
+	int next = BookingNumberNow();
+	var inner = journey["journey"]!.AsObject();
+	inner["signup_count"] = Math.Min(next - 1, inner["capacity"]!.GetValue<int>());
+	journey["is_over_capacity"] = next > MaxBookingNumber;
+	journey["event"]!["next_registration_sequence_number"] = next;
+}
 int pageRequests = 0;   // --failures: registration page requests since the last start or reset
 var bookingNumbers = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();   // attendee id -> booking number
 var attendees = new System.Collections.Concurrent.ConcurrentDictionary<string, JsonObject>();   // synthesized attendees by id
@@ -434,8 +446,15 @@ app.Run(async http => {
 	if (resp.ContentType != "") http.Response.ContentType = resp.ContentType;
 	http.Response.Headers["Cache-Control"] = "no-store";
 	foreach (var cookie in resp.Cookies) http.Response.Headers.Append("Set-Cookie", cookie);
-	http.Response.ContentLength = resp.Body.Length;
-	if (req.Method != "HEAD") await http.Response.Body.WriteAsync(resp.Body);
+	byte[] responseBody = resp.Body;
+	if (rsvpOk && method == "GET" && path.EndsWith("/load-for-visitor") && query == "" && resp.Status == 200) {   // --rsvp full keeps the captured (sold out) numbers
+		var journey = (JsonObject)JsonNode.Parse(responseBody)!;
+		ApplyBookingClock(journey);
+		responseBody = Encoding.UTF8.GetBytes(journey.ToJsonString());
+		ConsoleEx.WriteLine($"   seats: {journey["journey"]!["signup_count"]} of {journey["journey"]!["capacity"]} taken, next booking number {journey["event"]!["next_registration_sequence_number"]}{(journey["is_over_capacity"]!.GetValue<bool>() ? " (over capacity)" : "")}");
+	}
+	http.Response.ContentLength = responseBody.Length;
+	if (req.Method != "HEAD") await http.Response.Body.WriteAsync(responseBody);
 });
 
 string startUrl = $"http://localhost:{port}/";

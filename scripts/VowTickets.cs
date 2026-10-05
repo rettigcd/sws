@@ -10,7 +10,7 @@
 // --config: REQUIRED. The JSON file with the attendee and show (see UserConfig; example: credentials/dean.json). The .json suffix is
 //           optional, and a bare name is also looked for in the credentials/ folder (git-ignored: these files hold personal data).
 //           --title, --event, --group-size and --series override the file, in any order.
-// Default:  a dry run in mode 2. The steps before the RSVP are sent, then the RSVP request is printed but NOT sent. Add --submit to send it.
+// Default:  a dry run in mode 3 (full). The steps before the RSVP are sent, then the RSVP request is printed but NOT sent. Add --submit to send it.
 // --list:   print every event (uuid, start, status, seats, name) after step 1 and stop. Skips the wait for the run time.
 // --nowait: skip the wait for the run time (Thursday 09:59:59 for SNL configs) and start right away.
 // Retries: 5xx answers and network errors are retried one try at a time. The first events list and the journey load keep trying every second for
@@ -31,8 +31,8 @@
 //           is time to fix the config's Show before the opening. It never stops the run.
 // --mode:   what is sent once the event is open (all modes first poll the events list until it is open):
 //           1 (or min, minimal) = just the RSVP. Fastest; plus_ones is not checked against the journey's limit (assumed 1, as seen 2026-09-24 and 2026-10-01).
-//           2 (or partial) = load the journey (load-for-visitor), then the RSVP. (default)
-//           3 (or full) = copy the browser: page view (not waited for), auth check, load the journey, Pusher WebSocket (for X-Socket-ID),
+//           2 (or partial) = load the journey (load-for-visitor), then the RSVP.
+//           3 (or full) = (default) copy the browser: page view (not waited for), auth check, load the journey, Pusher WebSocket (for X-Socket-ID),
 //               log-interaction for the landing page and the Continue click (sent WITHOUT waiting for the answers, like the page: it does
 //               not await them either), the RSVP, then log-interaction for the result (also not waited for; the log is completed at the end).
 //           Whether modes 1 and 2 are enough is untested against an event that has room (see below).
@@ -101,6 +101,7 @@ var runConfig = new RunConfig();
 Func<VowEvent, bool> available = e => e.IsOpen && e.SlotsAvailable > 0 && !e.HasPassed;
 Func<VowEvent, bool> selector = available;
 DateTime runTime = DateTime.Now;
+DateTime? showOpenTime = null;	// when the show opens, if known (the SNL schedule, or the replay server's --open-show-in): the end of the run reports the time since then
 string selectorText = "";	// what the selector looks for, in words: the config's Show, or --title / --event
 string lastShowCheck = "";	// the text of the last show check that was printed; a check prints only when its result changes
 DateTime scriptStart = DateTime.Now;
@@ -116,7 +117,7 @@ string[] helpLines = {
 	"  --group-size N            Total people including you. Overrides the config.",
 	"  --help                    Show this list and exit.",
 	"  --list                    Print every event (uuid, start, status, seats, name) and stop. Skips the wait for the run time.",
-	"  --mode MODE               What is sent once the event is open: min (or 1) = just the RSVP; partial (or 2) = load the journey, then the RSVP (the default); full (or 3) = copy the browser.",
+	"  --mode MODE               What is sent once the event is open: min (or 1) = just the RSVP; partial (or 2) = load the journey, then the RSVP; full (or 3) = copy the browser (the default).",
 	"  --nowait                  Do not wait for the run time (Thursday 09:59:59 for SNL configs); start right away.",
 	"  --open-show-in SECONDS    Only with --replay-server: make the replay server's show open SECONDS from now (0 to 86400). The run waits for it.",
 	"  --replay-server PORT|URL  Test against the local replay server instead of vow.app (PORT means http://localhost:PORT). Nothing is sent to the real site.",
@@ -235,7 +236,7 @@ Console.WriteLine($"Config file: {Path.GetFullPath(configPath)}");
 context.InitializeFrom(config);
 selector = e => e.Name.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
 if (config.RunAt == ForSNL)
-	runTime = GetNextThursday10Am(-StartBeforeOpenMs);	// 09:59:59: the first request (and its connection setup) happens before the opening; the polling catches it
+	{ runTime = GetNextThursday10Am(-StartBeforeOpenMs); showOpenTime = runTime.AddMilliseconds(StartBeforeOpenMs); }	// 09:59:59: the first request (and its connection setup) happens before the opening; the polling catches it
 if (seriesOverride != null) context.Series = seriesOverride;
 if (groupSizeOverride != null) context.GroupSize = groupSizeOverride.Value;
 if (selectorOverride != null) selector = selectorOverride;
@@ -386,6 +387,15 @@ finally {
 	context.Pusher?.Dispose();
 
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} SCRIPT COMPLETE");
+	// how long it took, from the show's open time to the end of a successful run (a registered RSVP); to the console and to the log, just before the log file is written
+	if (context.RsvpAccepted && showOpenTime != null) {
+		DateTime finished = DateTime.Now;
+		string took = $"Completed successfully {(finished - showOpenTime.Value).TotalSeconds:0.0} s after the show opened ({showOpenTime.Value:HH:mm:ss.fff}); the RSVP was accepted {(context.RsvpAcceptedAt!.Value - showOpenTime.Value).TotalSeconds:0.0} s after it opened.";
+		Console.ForegroundColor = ConsoleColor.Green;
+		Console.WriteLine(took);
+		Console.ResetColor();
+		LogLn($"{finished:yyyy-MM-dd HH:mm:ss.fff} {took}");
+	}
 	string logPath = $"vow_{scriptStart:yyyy-MM-dd_HH-mm-ss}.log";
 	lock (logItems)
 		File.WriteAllText(logPath, string.Concat(logItems));
@@ -643,6 +653,7 @@ async Task Step8_SubmitRsvp(Context context) {
 		Console.ResetColor();
 		Console.WriteLine($"   {Excerpt(reply.Body, 1000)}");
 		context.RsvpAccepted = true;
+		context.RsvpAcceptedAt = DateTime.Now;
 		return;
 	}
 
@@ -798,6 +809,7 @@ async Task OpenShowInAsync(double seconds) {
 		throw new InvalidOperationException($"The replay server did not accept {path}: {(int)response.StatusCode} {Excerpt(body, 200)}");
 	// the run time becomes this open time, less the usual lead, so the wait for the run time (the "Run In:" countdown) counts down to it
 	runTime = opensAt.AddMilliseconds(-StartBeforeOpenMs);
+	showOpenTime = opensAt;
 	Console.WriteLine($"   run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
 }
@@ -1055,6 +1067,7 @@ public sealed class Context {
 
 	// ---- Result of step 8 ----
 	public bool RsvpAccepted { get; set; }
+	public DateTime? RsvpAcceptedAt { get; set; }
 
 	public void InitializeFrom(UserConfig config) {
 		Console.WriteLine($"Using config:\r\n\tseries: {config.Series},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tgroup size: {config.GroupSize}\r\n");
@@ -1115,7 +1128,7 @@ public sealed class UserConfig {
 
 public sealed class RunConfig {
 	/// <summary>1 = just the RSVP, 2 = load the journey then the RSVP, 3 = copy the browser. See the header.</summary>
-	public int Mode { get; set; } = 2;
+	public int Mode { get; set; } = 3;
 	public bool Submit { get; set; }
 	public bool ListOnly { get; set; }
 	public bool Wait { get; set; } = true;
