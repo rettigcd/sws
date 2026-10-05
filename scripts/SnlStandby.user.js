@@ -80,6 +80,11 @@
 		NAVIGATE_TIMEOUT_MS: 5000,
 		NAVIGATE_ATTEMPTS: 4,
 
+		// stage 2: if one of the registration page's own script files (<script src> in its HTML, same web address) has still not finished loading this
+		// long after the page started, the page can not start (a file hangs): reload at once instead of waiting STEP_TIMEOUT_MS. The page's own API
+		// calls are NOT part of this (they are slow at the go-live and the page just waits for them). The real go-live loaded its files in under 0.6 s.
+		SCRIPT_LOAD_TIMEOUT_MS: 5000,
+
 		// stage 2: after SUBMIT is clicked, if the RSVP has not been answered after this long, the banner starts to say so (and keeps counting). The script
 		// never cancels or resends an RSVP; the message only tells you to wait and not to click again.
 		RSVP_SLOW_NOTICE_MS: 10000,
@@ -208,6 +213,7 @@
 		if (!(CONFIG.RAPID_POLL_LEAD_SECONDS >= 0)) return 'CONFIG.RAPID_POLL_LEAD_SECONDS must be 0 or more.';
 		if (!Number.isInteger(CONFIG.RELOAD_ATTEMPTS) || CONFIG.RELOAD_ATTEMPTS < 1) return 'CONFIG.RELOAD_ATTEMPTS must be a whole number, 1 or more.';
 		if (!(CONFIG.RELOAD_WAIT_MS >= 0)) return 'CONFIG.RELOAD_WAIT_MS must be 0 or more.';
+		if (!(CONFIG.SCRIPT_LOAD_TIMEOUT_MS >= 1000)) return 'CONFIG.SCRIPT_LOAD_TIMEOUT_MS must be at least 1000.';
 		if (!(CONFIG.NAVIGATE_TIMEOUT_MS >= 1000)) return 'CONFIG.NAVIGATE_TIMEOUT_MS must be at least 1000.';
 		if (!(CONFIG.RSVP_SLOW_NOTICE_MS >= 1000)) return 'CONFIG.RSVP_SLOW_NOTICE_MS must be at least 1000.';
 		if (!Number.isInteger(CONFIG.NAVIGATE_ATTEMPTS) || CONFIG.NAVIGATE_ATTEMPTS < 1) return 'CONFIG.NAVIGATE_ATTEMPTS must be a whole number, 1 or more.';
@@ -297,13 +303,40 @@
 		return ` The script will not send it again. You can click SUBMIT on the form yourself, or let the script try once more: run  sessionStorage.removeItem('snlSubmitted_${uuid}')  in the console and reload the page.`;
 	}
 
+	let showOpenedAt = null;   // when the show opened (ms), as the list page measured it: handed over in the address, see readOpenTime
+
+	/** The open time (ms) the list page put in the address (#snl-open=...). It is kept in sessionStorage so a reload, or the page changing its own address, does not lose it. */
+	function readOpenTime(uuid) {
+		const key = 'snlOpenAt_' + uuid;
+		const found = location.hash.match(/snl-open=(\d{10,})/);
+		try {
+			if (found) sessionStorage.setItem(key, found[1]);
+			const saved = Number(sessionStorage.getItem(key));
+			return saved > 0 ? saved : null;
+		} catch (e) { return found ? Number(found[1]) : null; }   // storage blocked
+	}
+
+	/** "12.4 s" or "1 min 12.4 s" */
+	function formatDuration(ms) {
+		const seconds = Math.abs(ms) / 1000;
+		const text = seconds >= 60 ? `${Math.floor(seconds / 60)} min ${(seconds % 60).toFixed(1)} s` : `${seconds.toFixed(1)} s`;
+		return ms < 0 ? '-' + text : text;
+	}
+
 	function recordRsvp(entry) {
 		rsvpAnswered = true;
 		clearInterval(rsvpWatch);
+		if (showOpenedAt) entry.msAfterOpen = Date.now() - showOpenedAt;   // kept in the log too
 		(window.__snlRsvpLog = window.__snlRsvpLog || []).push(entry);
 		try { localStorage.setItem('snlRsvpLog', JSON.stringify(window.__snlRsvpLog)); } catch (e) { /* storage blocked */ }
 		log('RSVP response', entry);
-		if (entry.status >= 200 && entry.status < 300) banner(`RSVP accepted (HTTP ${entry.status}). Check the page for the confirmation number.`, 'ok');
+		if (entry.status >= 200 && entry.status < 300) {
+			const took = entry.msAfterOpen !== undefined ? formatDuration(entry.msAfterOpen) : null;
+			banner(`RSVP accepted (HTTP ${entry.status})${took ? ': ' + took + ' after the show opened' : ''}. Check the page for the confirmation number.`, 'ok', false,
+				`RSVP accepted (HTTP ${entry.status}). ` +
+				(took ? `<span style="font:700 22px/1.2 Consolas,monospace;background:rgba(0,0,0,.3);border-radius:4px;padding:1px 8px">${esc(took)}</span> after the show opened. ` : '') +
+				'Check the page for the confirmation number.');
+		}
 		else if (entry.status === 422 && /capacity_full/.test(entry.responseBody)) banner('The event is FULL (HTTP 422).', 'error');
 		else if (entry.status === 429) banner('Rate limited (HTTP 429). Do not keep clicking; wait.' + noResendNote(), 'error');
 		else if (entry.status === 0) banner('The RSVP request did not get an answer (network error). It may or may not have reached the server; check your email and the page before trying again.' + noResendNote(), 'error');
@@ -462,7 +495,11 @@
 			if (goingTo) return;
 			goingTo = url;
 			banner(`"${show.label}" is open (${how}). Opening the registration page...`, 'ok');
-			navigateWithRetry(url);
+			// the registration page is another web address (its own sessionStorage), so the open time travels in the address: #snl-open=<ms>.
+			// The registration page reads it to show how long after the show opened the RSVP was accepted.
+			let target = url;
+			try { const u = new URL(url); u.hash = 'snl-open=' + openAt.getTime(); target = u.href; } catch (e) { /* keep the plain address */ }
+			navigateWithRetry(target);
 		}
 
 		/** Goes to the registration page. The list page (and this script) stays alive until the new page starts to arrive, so if nothing has arrived
@@ -640,7 +677,36 @@
 		if (/just a moment|checking your browser|verify(ing)? you are (a )?human|attention required|enable javascript and cookies/i.test(text)) return 'the page shows a Cloudflare check ("verify you are human")';
 		if (document.querySelector('input[type="password"]')) return 'the page shows a sign-in form';
 		if (/\b(502 bad gateway|503 service (temporarily )?unavailable|504 gateway time-?out)\b|error 10\d\d|access denied/i.test(text)) return 'the page shows a server error page';
-		return null;
+		return hungScripts();
+	}
+
+	// The browser's list of finished downloads (resource timing) keeps 250 entries by default, and a full list would make finished files look unfinished.
+	// So the list is made bigger, and if it is ever full (or cannot be changed) hungScripts has no opinion.
+	let resourceTimingFull = false;
+	function prepareResourceTiming() {
+		try {
+			performance.setResourceTimingBufferSize(1500);
+			performance.addEventListener('resourcetimingbufferfull', () => { resourceTimingFull = true; });
+		} catch (e) { resourceTimingFull = true; }
+	}
+
+	/**
+	 * The registration page's own script files that have still not finished loading CONFIG.SCRIPT_LOAD_TIMEOUT_MS after the page started, as text; or null.
+	 * Only standard browser facts are used, no names from the site's code: every <script src> in the page's HTML that comes from the page's own web address
+	 * must have an entry in performance.getEntriesByName(src) once it has finished loading (a file that hangs has none). Null means "no opinion" and
+	 * is also what is returned when anything is unexpected (no such scripts, a full timing list), so a change in the site can at worst lose this early
+	 * reload, never cause a wrong one.
+	 */
+	function hungScripts() {
+		const age = performance.now();   // since this page started to load
+		if (resourceTimingFull || age < CONFIG.SCRIPT_LOAD_TIMEOUT_MS) return null;
+		const sources = [...document.querySelectorAll('script[src]')].map((el) => el.src).filter((src) => {
+			try { return new URL(src).origin === location.origin; } catch (e) { return false; }
+		});
+		if (!sources.length) return null;
+		const unfinished = sources.filter((src) => performance.getEntriesByName(src).length === 0);
+		if (!unfinished.length) return null;
+		return `${unfinished.length} of the page's ${sources.length} script files had not finished loading after ${Math.round(age / 1000)} s (${unfinished[0].split('/').pop().split('?')[0]}${unfinished.length > 1 ? ', ...' : ''})`;
 	}
 
 	/** Reload the registration page after a failure, up to CONFIG.RELOAD_ATTEMPTS tries in all, CONFIG.RELOAD_WAIT_MS apart. */
@@ -671,6 +737,8 @@
 		const eventUuid = (location.pathname.match(/\/event\/([^/]+)/) || [])[1] || 'unknown';
 		const submittedKey = 'snlSubmitted_' + eventUuid;
 		installRsvpRecorder();
+		showOpenedAt = readOpenTime(eventUuid);
+		prepareResourceTiming();
 		await banner('Registration page found. Waiting for the page to load...');
 
 		// ---- Step A: get to the form. The page opens on the landing page; the form is the next step. ----
