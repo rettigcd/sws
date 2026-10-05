@@ -1,6 +1,7 @@
 #:sdk Microsoft.NET.Sdk.Web
 #:property TargetFramework=net8.0
 #:property PublishAot=false
+#:include ConsoleEx.cs
 // Local replay of the captured SNL Standby / vow.app sign-up pages (saz/vow/snl_oct_01), for testing SnlStandby.user.js
 // when the real servers are not available. Spec: docs/capture-specific-spa-replay-spec.md. The .saz is NOT needed at run time:
 // extract_saz_replay.py (in this folder) turned it into replay-data/ (index.json + bodies/).
@@ -46,6 +47,7 @@
 // Test control: GET /__replay/open-in/N (N seconds, may be fractional) moves the open time to N seconds from now: the list goes back to
 // coming_soon, flips to open when N has passed, and closes ClosedAfterOpen later. It also starts everything afresh: new random event and journey
 // ids for both shows, repeated-response counters back at the first response, and the attendees from earlier tests forgotten. The exact flips are logged as "*** FLIP ... ***".
+// Each change is logged as "TEST CONTROL: ..." and its new open time ("opens in N s at HH:mm:ss.fff") is shown in ORANGE on the console (not in the log file).
 // The booking number (event.next_registration_sequence_number) is 1 when the show opens and grows by 10 per second; above 300 the RSVP is "full".
 // The Gmail app password is NOT in this file (it is tracked by git): put it alone on one line in credentials/replay-smtp.txt (git-ignored,
 // found by walking up from the current folder) or in the environment variable REPLAY_SMTP_KEY. Without it the mail is skipped and logged.
@@ -86,11 +88,18 @@ for (int i = 0; i < args.Length; i++) {
 	else if (args[i] == "--rsvp" && i + 1 < args.Length && args[i + 1] is "ok" or "full") rsvpOk = args[++i] == "ok";
 	else { Console.WriteLine("Usage: ReplayServer [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]   (rsvp defaults to ok; no email is sent unless --email; the slow calls are on unless --no-load)"); return; }
 }
-if (port == null) {
-	var probe = new TcpListener(IPAddress.Loopback, 0);
-	probe.Start();
-	port = ((IPEndPoint)probe.LocalEndpoint).Port;
-	probe.Stop();
+if (port == null) {   // no --port: try the default port, and if something else is using it, any free port (picked by the system)
+	const int DefaultPort = 50219;
+	foreach (int candidate in new[] { DefaultPort, 0 }) {
+		try {
+			var probe = new TcpListener(IPAddress.Loopback, candidate);
+			probe.Start();
+			port = ((IPEndPoint)probe.LocalEndpoint).Port;
+			probe.Stop();
+			break;
+		} catch (SocketException) { /* in use: try the next one */ }
+	}
+	if (port == null) { Console.WriteLine("No free port found."); return; }
 }
 
 // replay-data is in the replay-server folder, next to this file. It is looked for from the current folder and every folder above it (as
@@ -103,11 +112,10 @@ if (dataDir == null) { Console.WriteLine("replay-data folder not found (it is in
 var captured = JsonSerializer.Deserialize<List<Captured>>(File.ReadAllText(Path.Combine(dataDir, "index.json")),
 	new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
 string logPath = Path.Combine(Directory.GetCurrentDirectory(), $"replay_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
-var logLock = new object();
-void Log(string line) {
-	string stamped = $"{DateTime.Now:HH:mm:ss.fff} {line}";
-	lock (logLock) { Console.WriteLine(stamped); File.AppendAllText(logPath, stamped + Environment.NewLine); }
-}
+// Everything written through ConsoleEx.WriteLine goes to the console and, with the time in front, to the log file. {Fg.DarkYellow}...{Fg.Restore} in an
+// interpolated string draws just that part in a colour on the console (ConsoleEx.cs); the log file gets the plain text.
+ConsoleEx.LogPath = logPath;
+ConsoleEx.TimeStamp = true;
 
 // The two shows as captured on 2026-10-01. Every start, and every call of /__replay/open-in/N, gives each show a NEW random event id (guid) and
 // journey id (1000 to 4000), so a script can not rely on ids that are fixed between runs. They are swapped in below, in the request paths and in the text bodies, in exactly
@@ -186,7 +194,7 @@ Snapshot BuildSnapshot() {
 	}
 }
 void LogShowIds() {
-	foreach (var show in shows) Log($"   {show.Name}: event {show.NewEventId}  journey {show.NewJourneyId}   (captured: {show.EventId}  journey {show.JourneyId})");
+	foreach (var show in shows) ConsoleEx.WriteLine($"   {show.Name + ":",-20} event {show.NewEventId}  journey {show.NewJourneyId}");
 }
 Snapshot state = BuildSnapshot();
 // The default open time: the next 10:00 local time, today's if it is before 10:00 now and tomorrow's otherwise (any day of the week). In practice
@@ -219,7 +227,7 @@ app.Use(async (http, next) => {
 		using var reader = new StreamReader(http.Request.Body, Encoding.UTF8, leaveOpen: true);
 		string text = await reader.ReadToEndAsync();
 		http.Request.Body.Position = 0;
-		Log($"   {http.Request.Method} {http.Request.Path}{http.Request.QueryString} body: {(text.Length > 2000 ? text[..2000] + "..." : text)}");
+		ConsoleEx.WriteLine($"{Fg.Blue}{http.Request.Method}{Fg.Restore} {http.Request.Path}{http.Request.QueryString} body: {(text.Length > 2000 ? text[..2000] + "..." : text)}");
 	}
 	await next();
 });
@@ -237,7 +245,7 @@ app.Run(async http => {
 		if (failures && sinceOpenNow >= TimeSpan.Zero && sinceOpenNow < FailureWindow) {
 			// --failures: in the first seconds after the show opened these calls fail instead of answering
 			int code = Random.Shared.Next(2) == 0 ? 500 : 504;
-			Log($"   failure: {req.Method} {path} arrived {sinceOpenNow.TotalSeconds:0.0} s after the open; waits {FailureDelay.TotalSeconds:0.0} s, then {code}");
+			ConsoleEx.WriteLine($"   failure: {Fg.Blue}{req.Method}{Fg.Restore} {path} arrived {sinceOpenNow.TotalSeconds:0.0} s after the open; waits {FailureDelay.TotalSeconds:0.0} s, then {code}");
 			try { await Task.Delay(FailureDelay, http.RequestAborted); } catch (OperationCanceledException) { return; }   // the client gave up
 			http.Response.StatusCode = code;
 			http.Response.ContentType = code == 500 ? "application/json" : "text/plain";
@@ -246,7 +254,7 @@ app.Run(async http => {
 		}
 		if (underLoad) {
 			var delay = UnderLoadDelay;
-			Log($"   under load: {req.Method} {path} waits {delay.TotalSeconds:0.0} s");
+			ConsoleEx.WriteLine($"{Fg.Blue}{req.Method}{Fg.Restore} {path} {Fg.Cyan} under load of {delay.TotalSeconds:0.0} s{Fg.Restore}");
 			try { await Task.Delay(delay, http.RequestAborted); } catch (OperationCanceledException) { return; }   // the client gave up
 		}
 	}
@@ -265,9 +273,10 @@ app.Run(async http => {
 		attendees.Clear();
 		bookingNumbers.Clear();
 		Interlocked.Exchange(ref openAtTicks, (DateTime.UtcNow + TimeSpan.FromSeconds(secs)).Ticks);
-		string msg = $"show list is coming_soon now; opens in {secs} s at {OpenAt().ToLocalTime():HH:mm:ss.fff}; closes {ClosedAfterOpen.TotalMinutes} min after that. New ids: " +
-			string.Join("; ", shows.Select(sh => $"{sh.Name} event {sh.NewEventId} journey {sh.NewJourneyId}"));
-		Log("TEST CONTROL: " + msg);
+		string newIds = string.Join("; ", shows.Select(sh => $"{sh.Name} event {sh.NewEventId} journey {sh.NewJourneyId}"));
+		string opensAt = OpenAt().ToLocalTime().ToString("HH:mm:ss.fff");
+		string msg = $"show list is coming_soon now; opens in {secs} s at {opensAt}; closes {ClosedAfterOpen.TotalMinutes} min after that. New ids: {newIds}";   // the answer to the caller
+		ConsoleEx.WriteLine($"TEST CONTROL: show list is coming_soon now; opens in {secs} s at {Fg.DarkYellow}{opensAt}{Fg.Restore}; closes {ClosedAfterOpen.TotalMinutes} min after that. New ids: {newIds}");
 		ScheduleFlipLogs();
 		http.Response.ContentType = "text/plain";
 		await http.Response.WriteAsync(msg);
@@ -277,7 +286,7 @@ app.Run(async http => {
 	if (method == "GET" && path == EventsPath && query == "") {
 		var sinceOpen = DateTime.UtcNow - OpenAt();
 		var (body, phase) = EventsAnswer(sinceOpen, st);
-		if (phase != lastEventsState) { Log($"GET api.vow.app{path} -> {phase} ({sinceOpen.TotalSeconds:+0.0;-0.0}s from open)"); lastEventsState = phase; }
+		if (phase != lastEventsState) { ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path} -> {phase} ({sinceOpen.TotalSeconds:+0.0;-0.0}s from open)"); lastEventsState = phase; }
 		http.Response.ContentType = st.ComingSoon.ContentType;
 		http.Response.Headers["Cache-Control"] = "no-store";
 		foreach (var cookie in st.ComingSoon.Cookies) http.Response.Headers.Append("Set-Cookie", cookie);
@@ -318,7 +327,7 @@ app.Run(async http => {
 			}
 		} catch (JsonException) { problem = "the body is not valid JSON"; }
 		if (problem != null) {
-			Log($"PUT api.vow.app{path} -> 400 ({problem})");
+			ConsoleEx.WriteLine($"{Fg.Blue}PUT{Fg.Restore} api.vow.app{path} -> 400 ({problem})");
 			http.Response.StatusCode = 400;
 			http.Response.ContentType = "application/json";
 			await http.Response.WriteAsync(new JsonObject { ["error"] = "Bad request: " + problem }.ToJsonString());
@@ -337,8 +346,8 @@ app.Run(async http => {
 		bookingNumbers[attendee["id"]!.ToString()] = BookingNumberNow();
 		var reply = new JsonObject { ["attendees"] = new JsonObject { ["created"] = new JsonArray(attendee) } }.ToJsonString();
 		if (sendEmail) _ = SendTestConfirmation(path, attendee);
-		else Log("   no email sent (start the server with --email to send the TEST confirmation)");
-		Log($"PUT api.vow.app{path} -> 200 SYNTHESIZED success (attendee {attendee["id"]}, {Field("email")})");
+		else ConsoleEx.WriteLine("   no email sent (start the server with --email to send the TEST confirmation)");
+		ConsoleEx.WriteLine($"{Fg.Blue}PUT{Fg.Restore} api.vow.app{path} {Fg.Green}-> 200 SYNTHESIZED success (attendee {attendee["id"]}, {Field("email")}){Fg.Restore}");
 		http.Response.ContentType = "application/json";
 		await http.Response.WriteAsync(reply);
 		return;
@@ -360,21 +369,21 @@ app.Run(async http => {
 			step["content"]!["html"] = System.Text.RegularExpressions.Regex.Replace(html, @"(<span style=""font-weight: bold;"">)-(</span>)",
 				m => values.Count == 0 ? m.Value : m.Groups[1].Value + values.Dequeue() + m.Groups[2].Value);
 		}
-		Log($"GET api.vow.app{path}?{query} -> 200 SYNTHESIZED (captured journey with me/attendees = attendee {me["id"]})");
+		ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path}?{query} -> 200 SYNTHESIZED (captured journey with me/attendees = attendee {me["id"]})");
 		http.Response.ContentType = "application/json";
 		await http.Response.WriteAsync(journey.ToJsonString());
 		return;
 	}
 
 	if (rsvpOk && method == "PUT" && path.EndsWith("/attendees/rsvp") && BookingNumberNow() > MaxBookingNumber)
-		Log($"   booking number would be {BookingNumberNow()} (> {MaxBookingNumber}): sold out, answering with the captured 'event is full'");
+		ConsoleEx.WriteLine($"   booking number would be {BookingNumberNow()} (> {MaxBookingNumber}): sold out, answering with the captured 'event is full'");
 
 	string hostOnRequest = req.Host.Host;
 	var candidates = st.Hosts.Contains(hostOnRequest) ? new List<string> { hostOnRequest } : st.Hosts;
 	string? key = candidates.Select(h => Key(method, h, path, query)).FirstOrDefault(st.Sequences.ContainsKey);
 
 	if (key == null) {
-		Log($"404 UNMATCHED: {req.Method} {path}{(query == "" ? "" : "?" + query)}   [Host {req.Host}, Referer {req.Headers.Referer}]");
+		ConsoleEx.WriteLine($"{Fg.Red}404 UNMATCHED: {Fg.Blue}{req.Method}{Fg.Red} {path}{(query == "" ? "" : "?" + query)}   [Host {req.Host}, Referer {req.Headers.Referer}]{Fg.Restore}");
 		http.Response.StatusCode = 404;
 		return;
 	}
@@ -382,9 +391,8 @@ app.Run(async http => {
 	var seq = st.Sequences[key];
 	var (resp, n, reused) = seq.Next();
 	string what = key[(method.Length + 1)..];
-	Log(seq.Responses.Count == 1
-		? $"{req.Method} {what} -> {resp.Status}"
-		: $"{req.Method} {what} -> response {n} of {seq.Responses.Count}{(reused ? " [reused]" : "")} ({resp.Status})");
+	if (seq.Responses.Count == 1) ConsoleEx.WriteLine($"{Fg.Blue}{req.Method}{Fg.Restore} {what} -> {resp.Status}");
+	else ConsoleEx.WriteLine($"{Fg.Blue}{req.Method}{Fg.Restore} {what} -> response {n} of {seq.Responses.Count}{(reused ? " [reused]" : "")} ({resp.Status})");
 
 	http.Response.StatusCode = resp.Status;
 	if (resp.ContentType != "") http.Response.ContentType = resp.ContentType;
@@ -397,9 +405,10 @@ app.Run(async http => {
 string startUrl = $"http://localhost:{port}/";
 await app.StartAsync();
 ScheduleFlipLogs();
-Log($"Replay server running at {startUrl}   ({state.Entries.Count} captured responses, {state.Sequences.Count} distinct requests)");
+ConsoleEx.WriteLine($"Replay server running at {startUrl}");
 LogShowIds();
-Log($"   The show list opens at {OpenAt().ToLocalTime():ddd MMM d HH:mm:ss} local time (the default: the next 10:00). A client sets a sooner time with /__replay/open-in/N.");
+ConsoleEx.WriteLine($"   The show list opens at {Fg.DarkYellow}{OpenAt().ToLocalTime():ddd MMM d HH:mm:ss}{Fg.Restore}. Sets a sooner time with /__replay/open-in/N.");
+if (failures) ConsoleEx.WriteLine($"   Failures Enabled");
 Console.WriteLine("Ctrl+C to stop.");
 if (open) Process.Start(new ProcessStartInfo(startUrl) { UseShellExecute = true });
 await app.WaitForShutdownAsync();
@@ -410,7 +419,7 @@ void ScheduleFlipLogs() {
 	async Task At(DateTime when, string what) {
 		var wait = when - DateTime.UtcNow;
 		if (wait > TimeSpan.Zero) await Task.Delay(wait);
-		if (Interlocked.Read(ref openAtTicks) == mine) Log($"*** FLIP: show list is now {what} ***");
+		if (Interlocked.Read(ref openAtTicks) == mine) ConsoleEx.WriteLine($"*** FLIP: show list is now {what} ***");
 	}
 	_ = At(OpenAt(), "OPEN");
 	_ = At(OpenAt() + ClosedAfterOpen, "CLOSED");
@@ -439,8 +448,8 @@ async Task SendTestConfirmation(string rsvpPath, JsonObject attendee) {
 	if (to.Equals("test@example.com", StringComparison.OrdinalIgnoreCase)) to = "rettigcd@gmail.com";   // the local userscript's placeholder address goes to the developer instead
 	try {
 		string? key = SmtpKey();
-		if (key == null) { Log("   email skipped: no key (credentials/replay-smtp.txt or REPLAY_SMTP_KEY)"); return; }
-		if (!to.Contains('@')) { Log($"   email skipped: \"{to}\" is not an email address"); return; }
+		if (key == null) { ConsoleEx.WriteLine("   email skipped: no key (credentials/replay-smtp.txt or REPLAY_SMTP_KEY)"); return; }
+		if (!to.Contains('@')) { ConsoleEx.WriteLine($"   email skipped: \"{to}\" is not an email address"); return; }
 		string uuid = rsvpPath.Split('/')[4];
 		string show = JsonNode.Parse(state.OpenTemplate.Body)!["events"]!.AsArray().FirstOrDefault(e => e!["uuid"]!.GetValue<string>() == uuid)?["name"]?.GetValue<string>() ?? "SNL Standby";
 		string nl = Environment.NewLine;
@@ -452,8 +461,8 @@ async Task SendTestConfirmation(string rsvpPath, JsonObject attendee) {
 		};
 		using var smtp = new SmtpClient("smtp.gmail.com", 587) { EnableSsl = true, Credentials = new System.Net.NetworkCredential(SmtpUser, key) };
 		await smtp.SendMailAsync(mail);
-		Log($"   TEST confirmation email sent to {to}");
-	} catch (Exception e) { Log($"   TEST confirmation email to {to} FAILED: {e.GetBaseException().Message}"); }
+		ConsoleEx.WriteLine($"   TEST confirmation email sent to {to}");
+	} catch (Exception e) { ConsoleEx.WriteLine($"   TEST confirmation email to {to} FAILED: {e.GetBaseException().Message}"); }
 }
 
 // The calls that were slow in the 2026-10-01 capture (4 to 7 s at 10:00:25 to 10:00:47). Not the RSVP, the show list or the static files.
