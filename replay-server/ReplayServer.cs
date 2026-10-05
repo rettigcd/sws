@@ -22,8 +22,9 @@
 // Repeated identical requests get their captured responses in order; the last one repeats forever (state resets on restart).
 //
 // EXCEPTION: GET /api/v2/public/by-url/nbc/events (the show list the page and the userscript poll) is NOT replayed from the capture.
-// It follows a timeline that starts when the server starts (constants below): the captured coming-soon response for OpenAfter, then the
-// captured open response as a template, and after ClosedAfterOpen the same with status "closed" and no register_url (that is how the
+// It follows a timeline: the captured coming-soon response until the open time (by default the next 10:00 local time, today's if it is before
+// 10:00 now and tomorrow's otherwise, on any day of the week; a client brings it sooner with /__replay/open-in/N), then the captured open
+// response as a template, and after ClosedAfterOpen the same with status "closed" and no register_url (that is how the
 // closed responses in the Oct 1 vow logs look). No seat counts: the real responses have none.
 //
 // SYNTHESIZED (not captured): by default (--rsvp ok), PUT /api/v2/events/{uuid}/attendees/rsvp answers 200 with a made-up success body, as long as
@@ -60,8 +61,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-// ---- show-list timeline (seconds from server start / from the moment it opened) ----
-var OpenAfter = TimeSpan.FromSeconds(20);
+// ---- show-list timeline ----
 var ClosedAfterOpen = TimeSpan.FromMinutes(3);
 var UnderLoadDelay = TimeSpan.FromSeconds(5);   // how long each slow call waits under load
 var FailureWindow = TimeSpan.FromSeconds(5);    // --failures: calls that arrive less than this long after the show opened fail
@@ -189,7 +189,14 @@ void LogShowIds() {
 	foreach (var show in shows) Log($"   {show.Name}: event {show.NewEventId}  journey {show.NewJourneyId}   (captured: {show.EventId}  journey {show.JourneyId})");
 }
 Snapshot state = BuildSnapshot();
-long openAtTicks = (DateTime.UtcNow + OpenAfter).Ticks;   // when the show list flips to open (moved by /__replay/open-in/N)
+// The default open time: the next 10:00 local time, today's if it is before 10:00 now and tomorrow's otherwise (any day of the week). In practice
+// a client sets a sooner time for its test with /__replay/open-in/N.
+DateTime NextTenAm() {
+	var now = DateTime.Now;
+	var ten = new DateTime(now.Year, now.Month, now.Day, 10, 0, 0, DateTimeKind.Local);
+	return ten <= now ? ten.AddDays(1) : ten;
+}
+long openAtTicks = NextTenAm().ToUniversalTime().Ticks;   // when the show list flips to open (moved by /__replay/open-in/N)
 DateTime OpenAt() => new DateTime(Interlocked.Read(ref openAtTicks), DateTimeKind.Utc);
 string lastEventsState = "";
 int nextAttendeeId = 900000;
@@ -392,6 +399,7 @@ await app.StartAsync();
 ScheduleFlipLogs();
 Log($"Replay server running at {startUrl}   ({state.Entries.Count} captured responses, {state.Sequences.Count} distinct requests)");
 LogShowIds();
+Log($"   The show list opens at {OpenAt().ToLocalTime():ddd MMM d HH:mm:ss} local time (the default: the next 10:00). A client sets a sooner time with /__replay/open-in/N.");
 Console.WriteLine("Ctrl+C to stop.");
 if (open) Process.Start(new ProcessStartInfo(startUrl) { UseShellExecute = true });
 await app.WaitForShutdownAsync();
