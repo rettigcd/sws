@@ -18,7 +18,11 @@
 // --replay-server PORT|URL: test against the local replay server (replay-server/ReplayServer.cs) instead of the real vow.app. PORT is shorthand for
 //           http://localhost:PORT. The API, the registration page and the listing page are all that one origin. The Pusher connection (mode 3) is
 //           skipped (the replay server has none) and the wait for the run time is skipped (the replay server decides when the show opens; see its
-//           /__replay/open-in/N). Nothing is sent to the real site.
+//           /__replay/open-in/N), except with --open-show-in, which makes the run wait for the open time it sets. Nothing is sent to the real site.
+// --open-show-in SECONDS: only with --replay-server. Before anything else, asks the replay server to put the show list back to coming_soon and open
+//           it SECONDS from now (its test endpoint /__replay/open-in/N; SECONDS may be fractional, 0 = open at once, at most 86400). The server also
+//           gives both shows new random event and journey ids, which this script then reads from the list as usual. The run time becomes that open
+//           time less 1 s (like Thursday 09:59:59 for a 10:00 open) and the run WAITS for it with the usual "Run In:" countdown, unless --nowait.
 // Choosing: --event picks by uuid; --title picks the first upcoming event whose name contains TEXT (any case);
 //           with neither, the first event that is open, has seats and has not passed is used.
 // --mode:   what is sent once the event is open (all modes first poll the events list until it is open):
@@ -59,6 +63,10 @@ var JsonOptions = new JsonSerializerOptions {
 
 const string ForSNL = "forSNL";
 
+// The run starts this long BEFORE the show opens (Thursday 09:59:59 for a 10:00 open): the first request, and its connection setup, happen
+// before the opening and the polling catches it. Used for the weekly run time and for --open-show-in.
+const int StartBeforeOpenMs = 1000;
+
 // ---- Retries after server errors (5xx) and network errors. Everything below is one at a time: nothing is ever sent twice at once. ----
 // Read-only calls (the first events list, the journey): retry every RetryDelayMs for up to RetryBudgetSeconds counted from the first try,
 // so a spell of server errors of up to about 10 s is survived.
@@ -78,10 +86,11 @@ Func<VowEvent, bool> selector = available;
 DateTime runTime = DateTime.Now;
 DateTime scriptStart = DateTime.Now;
 
-const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--replay-server PORT|URL]";
+const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--replay-server PORT|URL] [--open-show-in SECONDS]";
 string? configArg = null;
 string? seriesOverride = null;
 string? replayServer = null;
+double? openShowIn = null;
 int? groupSizeOverride = null;
 Func<VowEvent, bool>? selectorOverride = null;
 for (int i = 0; i < args.Length; i++) {
@@ -123,6 +132,14 @@ for (int i = 0; i < args.Length; i++) {
 		case "--list": runConfig.ListOnly = true; break;
 		case "--nowait": runConfig.Wait = false; break;
 		case "--replay-server" when i + 1 < args.Length: replayServer = args[++i]; break;
+		case "--open-show-in" when i + 1 < args.Length: {
+			if (!double.TryParse(args[++i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds) || seconds < 0 || seconds > 86400) {
+				Console.Error.WriteLine($"--open-show-in must be a number of seconds from 0 to 86400 (got '{args[i]}').");
+				return 2;
+			}
+			openShowIn = seconds;
+			break;
+		}
 		// user form info
 		case "--group-size" when i + 1 < args.Length: groupSizeOverride = int.Parse(args[++i]); break;
 
@@ -133,6 +150,12 @@ for (int i = 0; i < args.Length; i++) {
 	}
 }
 
+// --open-show-in only makes sense against the replay server: it must never be sent to the real site.
+if (openShowIn != null && replayServer == null) {
+	Console.Error.WriteLine("--open-show-in only works together with --replay-server (it sets the open time on the replay server).");
+	return 2;
+}
+
 // ---- --replay-server: point everything at the local replay server (before anything is sent) ----
 if (replayServer != null) {
 	string baseUrl = replayServer.All(char.IsDigit) ? $"http://localhost:{replayServer}" : replayServer.TrimEnd('/');
@@ -141,8 +164,9 @@ if (replayServer != null) {
 		return 2;
 	}
 	Vow.UseReplayServer(baseUrl);
-	runConfig.Wait = false;
-	Console.WriteLine($"REPLAY SERVER: every call goes to {baseUrl}, not to vow.app. No Pusher, no wait for the run time.");
+	if (openShowIn == null) runConfig.Wait = false;   // with --open-show-in the run waits for that open time (minus StartBeforeOpenMs), unless --nowait
+	Console.WriteLine($"REPLAY SERVER: every call goes to {baseUrl}, not to vow.app. No Pusher. " +
+		(openShowIn == null ? "No wait for the run time." : runConfig.Wait ? "The run waits for the open time set by --open-show-in." : "No wait (--nowait)."));
 }
 
 // ---- Load the config file, then apply the command-line overrides. ----
@@ -169,7 +193,7 @@ Console.WriteLine($"Config file: {Path.GetFullPath(configPath)}");
 context.InitializeFrom(config);
 selector = e => e.Name.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
 if (config.RunAt == ForSNL)
-	runTime = GetNextThursday10Am(-1000);	// 09:59:59: the first request (and its connection setup) happens before the opening; the polling catches it
+	runTime = GetNextThursday10Am(-StartBeforeOpenMs);	// 09:59:59: the first request (and its connection setup) happens before the opening; the polling catches it
 if (seriesOverride != null) context.Series = seriesOverride;
 if (groupSizeOverride != null) context.GroupSize = groupSizeOverride.Value;
 if (selectorOverride != null) selector = selectorOverride;
@@ -218,6 +242,10 @@ Task? pageView = null;
 var background = new List<Task>();
 
 try {
+	// ---- --open-show-in: set the replay server's open time first, so everything below sees the show as coming soon until then ----
+	if (openShowIn != null)
+		await OpenShowInAsync(openShowIn.Value);
+
 	// ---- wait ----
 	// Inside the try so that stopping here still writes the log (in finally).
 	if (runConfig.Wait && !WaitUntilRunTime())
@@ -657,6 +685,25 @@ void WriteWarning(string message) {
 	Console.Write("   WARNING: ");
 	Console.ResetColor();
 	Console.WriteLine(message);
+}
+
+// Replay server only (--open-show-in): GET /__replay/open-in/N. The reply says when the show opens and the new ids.
+async Task OpenShowInAsync(double seconds) {
+	string path = $"/__replay/open-in/{seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+	string label = $"0. open the replay server's show in {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
+	using var request = new HttpRequestMessage(HttpMethod.Get, Vow.ApiBase + path);
+	DateTime opensAt = DateTime.Now.AddSeconds(seconds);   // when the server will open the show (it counts from the moment it gets the request)
+	using var response = await http.SendAsync(request);
+	string body = await response.Content.ReadAsStringAsync();
+	Console.WriteLine($"{label}: GET {path} -> {(int)response.StatusCode}");
+	Console.WriteLine($"   {Excerpt(body, 400)}");
+	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {label}: {(int)response.StatusCode} {body}");
+	if (!response.IsSuccessStatusCode)
+		throw new InvalidOperationException($"The replay server did not accept {path}: {(int)response.StatusCode} {Excerpt(body, 200)}");
+	// the run time becomes this open time, less the usual lead, so the wait for the run time (the "Run In:" countdown) counts down to it
+	runTime = opensAt.AddMilliseconds(-StartBeforeOpenMs);
+	Console.WriteLine($"   run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
+	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
 }
 
 string Excerpt(string text, int max) => text.Length > max ? text[..max] + "..." : text;
