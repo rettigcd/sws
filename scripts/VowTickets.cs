@@ -295,7 +295,7 @@ try {
 		await Step5_ConnectPusher(context);		// possible early call (see the step)
 		// The page does not wait for these two reports (it does not await logInteraction), so they go out together, with no wait, and
 		// the RSVP follows at once. Waiting for them cost two slow round trips before the RSVP (20.9 s against about 10 s with the replay
-		// server's --under-load).
+		// server under its default load).
 		background.Add(Step6_LogLandingView(context));
 		background.Add(Step7_LogContinueClick(context));
 	}

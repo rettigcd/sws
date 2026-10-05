@@ -8,7 +8,7 @@
 //
 // Log:  everything printed is also written to replay_<date>_<time>.log in the current folder (git-ignored; with dotnet run that is the replay-server/ folder), with timestamps, the bodies of
 //       PUT/POST requests, and the Host/Referer of unmatched requests, for later analysis. Search it for "UNMATCHED" and "SYNTHESIZED".
-// Run:  dotnet run replay-server/ReplayServer.cs -- [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]
+// Run:  dotnet run replay-server/ReplayServer.cs -- [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures] [--help]
 //
 // The captured traffic used four hosts. They are all served from this ONE origin, with no path prefixes, because their paths do not collide:
 //   snlstandby.nbcuni.com  /                                   the page with the iframe          -> http://localhost:PORT/
@@ -40,7 +40,10 @@
 // --failures: the slow calls below (auth/user, load-for-visitor, media, log-interaction) that arrive during the first 5 seconds after the show
 // opened do not succeed after their delay: they wait 3 seconds and answer 500 or 504 (chosen at random for each call). Calls before the open,
 // and calls 5 or more seconds after it, behave as usual (under load: the flat wait, then the captured answer). It works with or without --no-load.
-// Under load is the DEFAULT; --no-load turns it off. (--under-load is still accepted and changes nothing.)
+// --failures ALSO makes the registration page hang: the first 2 requests for it (GET /event/{uuid}/journeys/{id}) after each start or
+// /__replay/open-in/N get no answer at all. The server holds them until the client gives up (a script that asks again cancels the old request),
+// then answers the later ones as usual.
+// Under load is the DEFAULT; --no-load turns it off.
 // Under load the server copies what the 2026-10-01 go-live looked like. The calls that were slow in the capture between 10:00:25 and 10:00:47
 // (GET /api/auth/user, load-for-visitor, GET /api/v2/media/*, log-interaction) each wait a flat 5 seconds before they are answered. The
 // show list, the page's files and the RSVP itself (0.18 s at 10:01:00 in the capture) stay fast. The delays are logged.
@@ -67,11 +70,29 @@ using System.Text.Json.Nodes;
 var ClosedAfterOpen = TimeSpan.FromMinutes(3);
 var UnderLoadDelay = TimeSpan.FromSeconds(5);   // how long each slow call waits under load
 var FailureWindow = TimeSpan.FromSeconds(5);    // --failures: calls that arrive less than this long after the show opened fail
+int HangPageRequests = 2;                        // --failures: how many registration page requests get no answer
 var FailureDelay = TimeSpan.FromSeconds(3);     // --failures: how long such a call waits before the 500 / 504
 const string EventsPath = "/api/v2/public/by-url/nbc/events";
 
 const string SmtpUser = "rettigcd@gmail.com";
 
+// --help: every option, one per line, in alphabetical order
+string[] helpLines = {
+	"Replay server for the SNL Standby / vow.app pages. Usage: ReplayServer [options]",
+	"",
+	"  --email          Send a synthesized TEST confirmation email for each successful RSVP (smtp.gmail.com; the key is read from",
+	"                   credentials/replay-smtp.txt or the REPLAY_SMTP_KEY variable). Without it no email is sent.",
+	"  --failures       Make things fail: in the first 5 s after the show opens, the slow calls (auth/user, load-for-visitor, media,",
+	"                   log-interaction) wait 3 s and answer 500 or 504, and the first 2 requests for the registration page get no answer.",
+	"  --help           Show this list and exit.",
+	"  --no-load        Turn the under-load delays off. By default those slow calls each wait a flat 5 s before they are answered.",
+	"  --open           Open the site in the default browser when the server starts.",
+	"  --port N         Listen on port N. Without it: port 50219, or another free port if 50219 is in use.",
+	"  --rsvp ok|full   How the RSVP is answered. ok (the default): success, with a booking number that grows with the time since the show",
+	"                   opened (sold out after 300). full: every RSVP gets the captured \"event is full\" answer (422).",
+	"",
+	"Test control while running: GET /__replay/open-in/N sets the show to open N seconds from now (and creates new ids).",
+};
 int? port = null;
 bool rsvpOk = true;   // default: --rsvp ok
 bool open = false;
@@ -79,14 +100,15 @@ bool sendEmail = false;   // --email
 bool underLoad = true;   // default; --no-load turns it off
 bool failures = false;   // --failures
 for (int i = 0; i < args.Length; i++) {
-	if (args[i] == "--port" && i + 1 < args.Length) port = int.Parse(args[++i]);
+	if (args[i] == "--help") { foreach (var line in helpLines) Console.WriteLine(line); return; }
+	else if (args[i] == "--port" && i + 1 < args.Length) port = int.Parse(args[++i]);
 	else if (args[i] == "--open") open = true;
 	else if (args[i] == "--email") sendEmail = true;
-	else if (args[i] == "--under-load") underLoad = true;
 	else if (args[i] == "--no-load") underLoad = false;
 	else if (args[i] == "--failures") failures = true;
 	else if (args[i] == "--rsvp" && i + 1 < args.Length && args[i + 1] is "ok" or "full") rsvpOk = args[++i] == "ok";
-	else { Console.WriteLine("Usage: ReplayServer [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]   (rsvp defaults to ok; no email is sent unless --email; the slow calls are on unless --no-load)"); return; }
+	else { Console.WriteLine("Usage: ReplayServer [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]   (rsvp defaults to ok; no email is sent unless --email; the slow calls are on unless --no-load)");
+		Console.WriteLine("Run with --help for a description of each option."); return; }
 }
 if (port == null) {   // no --port: try the default port, and if something else is using it, any free port (picked by the system)
 	const int DefaultPort = 50219;
@@ -212,6 +234,7 @@ int nextAttendeeId = 900000;
 // Numbers above MaxBookingNumber are not allowed, so after that the RSVP gets the captured "event is full" 422.
 const int MaxBookingNumber = 300;
 int BookingNumberNow() => 1 + 10 * Math.Max(0, (int)(DateTime.UtcNow - OpenAt()).TotalSeconds);
+int pageRequests = 0;   // --failures: registration page requests since the last start or reset
 var bookingNumbers = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();   // attendee id -> booking number
 var attendees = new System.Collections.Concurrent.ConcurrentDictionary<string, JsonObject>();   // synthesized attendees by id
 
@@ -238,6 +261,18 @@ app.Run(async http => {
 	string path = req.Path.Value ?? "/";
 	string query = req.QueryString.HasValue ? req.QueryString.Value![1..] : "";
 	var st = state;   // one request uses one snapshot, even if a reset swaps it meanwhile
+
+	// --failures: the first HangPageRequests requests for the registration page (GET /event/{uuid}/journeys/{id}) get no answer at all. The server
+	// holds the request until the client gives up (a browser cancels it when a new navigation starts), then answers the later requests as usual.
+	if (failures && method == "GET" && System.Text.RegularExpressions.Regex.IsMatch(path, @"^/event/[0-9a-f-]{36}/journeys/\d+$")) {
+		int pageTry = Interlocked.Increment(ref pageRequests);
+		if (pageTry <= HangPageRequests) {
+			ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} {path} {Fg.Red}hangs (registration page request {pageTry} of {HangPageRequests}): no answer until the client gives up{Fg.Restore}");
+			try { await Task.Delay(Timeout.Infinite, http.RequestAborted); } catch (OperationCanceledException) { /* the client gave up */ }
+			ConsoleEx.WriteLine($"   the client gave up on registration page request {pageTry}");
+			return;
+		}
+	}
 
 	// under load (the default, see --no-load): the calls that were slow at the 2026-10-01 go-live wait a flat 5 s before anything else happens
 	if (IsSlowUnderLoad(path)) {
@@ -272,6 +307,7 @@ app.Run(async http => {
 		state = BuildSnapshot();
 		attendees.Clear();
 		bookingNumbers.Clear();
+		Interlocked.Exchange(ref pageRequests, 0);   // --failures starts over: the next registration page requests hang again
 		Interlocked.Exchange(ref openAtTicks, (DateTime.UtcNow + TimeSpan.FromSeconds(secs)).Ticks);
 		string newIds = string.Join("; ", shows.Select(sh => $"{sh.Name} event {sh.NewEventId} journey {sh.NewJourneyId}"));
 		string opensAt = OpenAt().ToLocalTime().ToString("HH:mm:ss.fff");
@@ -408,7 +444,7 @@ ScheduleFlipLogs();
 ConsoleEx.WriteLine($"Replay server running at {startUrl}");
 LogShowIds();
 ConsoleEx.WriteLine($"   The show list opens at {Fg.DarkYellow}{OpenAt().ToLocalTime():ddd MMM d HH:mm:ss}{Fg.Restore}. Sets a sooner time with /__replay/open-in/N.");
-if (failures) ConsoleEx.WriteLine($"   Failures Enabled");
+if (failures) ConsoleEx.WriteLine($"   Failures Enabled (including: the first {HangPageRequests} registration page requests get no answer)");
 Console.WriteLine("Ctrl+C to stop.");
 if (open) Process.Start(new ProcessStartInfo(startUrl) { UseShellExecute = true });
 await app.WaitForShutdownAsync();

@@ -56,9 +56,13 @@
 		OPEN_MINUTE: 0,
 		RAPID_POLL_LEAD_SECONDS: 5,
 
-		// The one polling rate, used once the rapid polling has started: modes 0 and 1 fetch the show list themselves every N ms (0 = rely on the page's
-		// own 20 s refresh); mode 2 makes the page refresh its own list every N ms (must be at least 100 there).
+		// The rapid polling, once it has started: the script fetches the show list itself and starts a new request every FAST_POLL_MS (1000 = one a
+		// second) WITHOUT waiting for the earlier ones, so a slow or hung request cannot hold up the next. A request is cancelled after POLL_TIMEOUT_MS,
+		// at most MAX_POLLS_IN_FLIGHT are out at once (so we do not use up the browser's connections), and the first answer that shows the show open
+		// wins: the other requests are cancelled. The page's own 20 s refresh is left alone.
 		FAST_POLL_MS: 1000,
+		POLL_TIMEOUT_MS: 5000,
+		MAX_POLLS_IN_FLIGHT: 5,
 		GIVE_UP_AFTER_MIN: 90,              // stage 1: stop waiting this many minutes after the open time
 		STEP_TIMEOUT_MS: 20000,             // stage 2: how long to wait for each page/step to appear. Starts when the registration page starts (after the
 		                                    // show opened), NOT during the wait for the open. The page's own startup (auth check, then the journey load)
@@ -70,27 +74,30 @@
 		RELOAD_ATTEMPTS: 4,
 		RELOAD_WAIT_MS: 1000,
 
+		// stage 1 -> 2: once the list says the show is open, the script navigates to the registration page. If that page has not started to arrive after
+		// NAVIGATE_TIMEOUT_MS (the server does not answer), the navigation is started again, NAVIGATE_ATTEMPTS tries in all. This is only about the page's
+		// first byte: after it has started to arrive, the registration page has its own reloads (RELOAD_ATTEMPTS above).
+		NAVIGATE_TIMEOUT_MS: 5000,
+		NAVIGATE_ATTEMPTS: 4,
+
+		// stage 2: after SUBMIT is clicked, if the RSVP has not been answered after this long, the banner starts to say so (and keeps counting). The script
+		// never cancels or resends an RSVP; the message only tells you to wait and not to click again.
+		RSVP_SLOW_NOTICE_MS: 10000,
+
 		DEBUG: true,                        // log to the browser console
 
 		// ---- SPEED-UP of the list on screen (stage 1) ----
-		// The list page only redraws itself every 20 s, so its "Register Now" button can be up to 20 s late. This picks what, if anything, makes
-		// it redraw sooner (details in the comment above listStage).
+		// The list page only redraws itself every 20 s (its own timer, which this script leaves alone), so its "Register Now" button can be up to 20 s
+		// late. This picks what, if anything, makes it show sooner (details in the comment above listStage).
 		//   'auto' = the script looks at the page's list component a few seconds after the list page loads (and again at the start of the
-		//            rapid polling) and uses the best mode the page allows: 2 if it has load() and its timer, else 1 if it has $set(), else 0.
-		//            The countdown banner shows the choice. (default)
+		//            rapid polling) and uses the best mode the page allows: 1 if it has $set(), else 0. The countdown banner shows the choice. (default)
 		// or force one mode by number:
-		//   0 = change nothing: we navigate to the registration page ourselves as soon as our poll sees "open"  (no speed-up)
+		//   0 = change nothing: we navigate to the registration page ourselves as soon as OUR poll sees "open"  (no speed-up)
 		//   1 = when OUR poll finds the show open, push the events it got into the page and follow the page's own "Register Now" link; if the
 		//       push cannot be done or no link shows within PUSH_WAIT_MS, redirect to register_url ourselves (= mode 0)
-		//   2 = leave the page's own 20 s timer alone until RAPID_POLL_LEAD_SECONDS before opening, then cancel it and run a timer
-		//       of FAST_POLL_MS instead. The script does NOT fetch the list by itself in this mode: it follows the "Register Now" link the
-		//       page draws. If the page's component cannot be found it polls itself; and if no link has shown WATCHDOG_MS after the open
-		//       time, it starts polling itself as well.
-		// Mode 0 was run against the replay server (headless Chrome); the registration page was requested about 0.3 s after the open.
 		SPEEDUP: 'auto',
 		CAPABILITY_WAIT_MS: 2500,           // 'auto': how long after the list page starts to wait for the page's list component before concluding it is not there
 		PUSH_WAIT_MS: 1000,                 // mode 1: how long to wait for the page's link after pushing the events before redirecting ourselves
-		WATCHDOG_MS: 3000,                  // mode 2: if no link has shown this long after the open time, start our own polling too
 
 		// ---- TESTING (programmers only) ----
 		// Set a number of seconds to make the LOCAL replay server (replay-server/ReplayServer.cs, page on localhost) put the show list back to
@@ -156,6 +163,7 @@
 
 	let bannerEl = null;
 	let bannerShown = '';   // the HTML now in the box, so it is only rewritten when it changes
+	let keepOpenWarning = false;   // true only during the first wait (the countdown, before the rapid polling): the banner then starts with the "keep this window open" line
 	/** Escapes a value for use inside HTML. EVERY value that is not one of our own constants (event names from the API, profile fields, server
 	 *  error text, ...) must go through this before it is put into banner HTML. */
 	const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -182,7 +190,9 @@
 		const colors = { info: '#1f4fd8', ok: '#1a7f37', warn: '#b26a00', error: '#c62828' };
 		bannerEl.style.background = colors[kind] || colors.info;
 		const body = html !== null ? html : esc(text).replace(/\n/g, '<br>');
-		const full = (profileSummaryHtml ? `<div style="margin-bottom:4px">${profileSummaryHtml}</div>` : '') + `<div>${body}</div>`;
+		// Chrome slows the timers of hidden or minimised tabs (to about 1 a minute after 5 minutes), which could make the script late at the open time.
+		const keepOpen = keepOpenWarning ? '<div style="font-weight:700;margin-bottom:4px">Keep this window open and in the foreground as the open-time approaches.</div>' : '';
+		const full = keepOpen + (profileSummaryHtml ? `<div style="margin-bottom:4px">${profileSummaryHtml}</div>` : '') + `<div>${body}</div>`;
 		if (full !== bannerShown) { bannerEl.innerHTML = full; bannerShown = full; }
 	}
 
@@ -198,10 +208,15 @@
 		if (!(CONFIG.RAPID_POLL_LEAD_SECONDS >= 0)) return 'CONFIG.RAPID_POLL_LEAD_SECONDS must be 0 or more.';
 		if (!Number.isInteger(CONFIG.RELOAD_ATTEMPTS) || CONFIG.RELOAD_ATTEMPTS < 1) return 'CONFIG.RELOAD_ATTEMPTS must be a whole number, 1 or more.';
 		if (!(CONFIG.RELOAD_WAIT_MS >= 0)) return 'CONFIG.RELOAD_WAIT_MS must be 0 or more.';
-		if (!['auto', 0, 1, 2].includes(CONFIG.SPEEDUP)) return "CONFIG.SPEEDUP must be 'auto', 0, 1 or 2.";
-		if ((CONFIG.SPEEDUP === 2 || CONFIG.SPEEDUP === 'auto') && !(CONFIG.FAST_POLL_MS >= 100)) return 'CONFIG.FAST_POLL_MS must be at least 100 when speed-up mode 2 can be used.';
+		if (!(CONFIG.NAVIGATE_TIMEOUT_MS >= 1000)) return 'CONFIG.NAVIGATE_TIMEOUT_MS must be at least 1000.';
+		if (!(CONFIG.RSVP_SLOW_NOTICE_MS >= 1000)) return 'CONFIG.RSVP_SLOW_NOTICE_MS must be at least 1000.';
+		if (!Number.isInteger(CONFIG.NAVIGATE_ATTEMPTS) || CONFIG.NAVIGATE_ATTEMPTS < 1) return 'CONFIG.NAVIGATE_ATTEMPTS must be a whole number, 1 or more.';
+		if (!['auto', 0, 1].includes(CONFIG.SPEEDUP)) return "CONFIG.SPEEDUP must be 'auto', 0 or 1.";
+		if (!(CONFIG.FAST_POLL_MS >= 100)) return 'CONFIG.FAST_POLL_MS must be at least 100.';
+		if (!(CONFIG.POLL_TIMEOUT_MS >= 500)) return 'CONFIG.POLL_TIMEOUT_MS must be at least 500.';
+		if (!Number.isInteger(CONFIG.MAX_POLLS_IN_FLIGHT) || CONFIG.MAX_POLLS_IN_FLIGHT < 1) return 'CONFIG.MAX_POLLS_IN_FLIGHT must be a whole number, 1 or more.';
 		if (!(CONFIG.PROFILE_WAIT_MS >= 0)) return 'CONFIG.PROFILE_WAIT_MS must be 0 or more.';
-		if (!(CONFIG.CAPABILITY_WAIT_MS >= 0 && CONFIG.PUSH_WAIT_MS >= 0 && CONFIG.WATCHDOG_MS >= 0)) return 'CONFIG.CAPABILITY_WAIT_MS, PUSH_WAIT_MS and WATCHDOG_MS must be 0 or more.';
+		if (!(CONFIG.CAPABILITY_WAIT_MS >= 0 && CONFIG.PUSH_WAIT_MS >= 0)) return 'CONFIG.CAPABILITY_WAIT_MS and PUSH_WAIT_MS must be 0 or more.';
 		const t = testOpenInSeconds;   // only checked on localhost, where it is used
 		if (t !== null && !(typeof t === 'number' && t >= 0 && t <= 86400)) return 'CONFIG.TEST_OPEN_IN_SECONDS must be null or a number of seconds from 0 to 86400.';
 		return null;
@@ -264,34 +279,51 @@
 		};
 	}
 
+	let rsvpAnswered = false;
+	let rsvpWatch = null;
+	/** After SUBMIT: until the RSVP is answered, the banner says how long we have been waiting. The script never cancels or resends the RSVP. */
+	function watchRsvpAnswer() {
+		const sentAt = Date.now();
+		rsvpWatch = setInterval(() => {
+			if (rsvpAnswered) { clearInterval(rsvpWatch); return; }
+			const waited = Date.now() - sentAt;
+			if (waited >= CONFIG.RSVP_SLOW_NOTICE_MS) banner(`No answer from the RSVP after ${Math.round(waited / 1000)} s. It may still be processing. Do NOT click SUBMIT again: wait, and check the page and your email. The script will not send it again.`, 'warn', true);
+		}, 1000);
+	}
+
+	/** For an RSVP that did not succeed: the script never sends it again; this says how to try again by hand. */
+	function noResendNote() {
+		const uuid = (location.pathname.match(/\/event\/([^/]+)/) || [])[1] || 'unknown';
+		return ` The script will not send it again. You can click SUBMIT on the form yourself, or let the script try once more: run  sessionStorage.removeItem('snlSubmitted_${uuid}')  in the console and reload the page.`;
+	}
+
 	function recordRsvp(entry) {
+		rsvpAnswered = true;
+		clearInterval(rsvpWatch);
 		(window.__snlRsvpLog = window.__snlRsvpLog || []).push(entry);
 		try { localStorage.setItem('snlRsvpLog', JSON.stringify(window.__snlRsvpLog)); } catch (e) { /* storage blocked */ }
 		log('RSVP response', entry);
 		if (entry.status >= 200 && entry.status < 300) banner(`RSVP accepted (HTTP ${entry.status}). Check the page for the confirmation number.`, 'ok');
 		else if (entry.status === 422 && /capacity_full/.test(entry.responseBody)) banner('The event is FULL (HTTP 422).', 'error');
-		else if (entry.status === 429) banner('Rate limited (HTTP 429). Do not keep clicking; wait.', 'error');
-		else if (entry.status === 0) banner('The RSVP request did not get an answer (network error). It may or may not have reached the server; check before trying again.', 'error');
-		else banner(`RSVP failed: HTTP ${entry.status} ${entry.responseBody.slice(0, 200)}`, 'error');
+		else if (entry.status === 429) banner('Rate limited (HTTP 429). Do not keep clicking; wait.' + noResendNote(), 'error');
+		else if (entry.status === 0) banner('The RSVP request did not get an answer (network error). It may or may not have reached the server; check your email and the page before trying again.' + noResendNote(), 'error');
+		else banner(`RSVP failed: HTTP ${entry.status} ${entry.responseBody.slice(0, 200)}.` + noResendNote(), 'error');
 	}
 
 	// =====================================================================
 	// ==================  STAGE 1: the show list (pro.vow.app)  ===========
 	// =====================================================================
-	// Speeding up the page's own 20 s refresh (the "Register Now" button only appears when the page itself reloads the list).
-	// The list page is a Vue 2 component (.nbc-page) with data { events, pollTimer } and a method load({silent}) that GETs LIST_API,
-	// sets this.events, and is called by setInterval(..., 2e4). Because @grant none runs us in the page's own JS world, the component
-	// is reachable as  document.querySelector('.nbc-page').__vue__  (call it vm). The options, selected with CONFIG.SPEEDUP ('auto' picks the best
-	// one the page allows, see bestSpeedup; or force 0, 1 or 2):
-	//   0. No change needed: we already navigate to register_url ourselves as soon as our own poll sees "open" (go() below), so the
-	//      page's button is never needed. Only the on-screen list stays up to 20 s behind.
+	// Speeding up the page's own 20 s refresh (the "Register Now" button only appears when the page itself reloads the list). We leave the page's
+	// timer alone: our own rapid polling (see listStage) finds the open show, and then, depending on CONFIG.SPEEDUP ('auto' picks the best one the
+	// page allows, see bestSpeedup; or force 0 or 1):
+	//   0. No change needed: we navigate to register_url ourselves as soon as our own poll sees "open" (go() below), so the page's button is
+	//      never needed. Only the on-screen list stays up to 20 s behind.
 	//   1. Feed our finding into the page:   vm.$set(vm, 'events', json.events)  when our poll finds the chosen show open (not on the polls
 	//      before that), then follow the page's own "Register Now" link. If $set cannot be done, or no link shows within PUSH_WAIT_MS, we
 	//      redirect to register_url ourselves (mode 0). No extra requests.
-	//   2. Replace the page's timer:         at the rapid-polling start clearInterval(vm.pollTimer); vm.pollTimer = setInterval(() => vm.load({ silent: true }),
-	//      CONFIG.FAST_POLL_MS) -- the page's slow 20 s timer is cancelled and the page polls at the fast rate. Our own poll is switched
-	//      off in this mode; we go to the page's "Register Now" link (checked every 250 ms). If the component is not found we poll ourselves.
-	// Cautions: wait for .nbc-page to exist (it mounts after we start); .nbc-page / load are the site's internal names and can change
+	// The list page is a Vue 2 component (.nbc-page) with data { events, pollTimer } and a method load({silent}). Because @grant none runs us in
+	// the page's own JS world, the component is reachable as  document.querySelector('.nbc-page').__vue__  (call it vm).
+	// Cautions: wait for .nbc-page to exist (it mounts after we start); .nbc-page and $set are Vue's / the site's internal names and can change
 	// with a rebuild, so check they exist. The rate limit of 10 is on the RSVP request only (docs/VOW_SNL_FLOW.md 5.4); the show list returned no
 	// limit headers and was not throttled at about 3 requests per second (2,619 requests on 2026-10-01), so extra list fetches do not use it up.
 	/** The list page's Vue component (see the comment above), or null if it is not there (yet) or does not have the events list we expect. */
@@ -301,13 +333,12 @@
 		return vm && Array.isArray(vm.events) ? vm : null;
 	}
 
-	/** What the page's component allows right now: { mode: 2 | 1 | 0, why } (the best speed-up mode, and the reason). */
+	/** What the page's component allows right now: { mode: 1 | 0, why } (the best speed-up mode, and the reason). */
 	function bestSpeedup() {
 		const vm = pageVm();
 		if (!vm) return { mode: 0, why: 'the page component (.nbc-page) with its events list was not found' };
-		if (typeof vm.load === 'function' && 'pollTimer' in vm) return { mode: 2, why: 'the page component has load() and its timer' };
-		if (typeof vm.$set === 'function') return { mode: 1, why: 'the page component has events and $set(), but not load() and its timer' };
-		return { mode: 0, why: 'the page component has neither load() with its timer nor $set()' };
+		if (typeof vm.$set === 'function') return { mode: 1, why: 'the page component has events and $set()' };
+		return { mode: 0, why: 'the page component has no $set()' };
 	}
 
 	let pageVmWarned = false;
@@ -319,16 +350,6 @@
 			return false;
 		}
 		try { action(vm); return true; } catch (e) { log('speed-up mode 1 failed', e); return false; }
-	}
-
-	/** Speed-up mode 2: cancel the page's 20 s timer and replace it with one every CONFIG.FAST_POLL_MS. Resolves true when done, false if the page cannot do it. */
-	async function installFastPageTimer() {
-		const vm = await waitFor(pageVm, CONFIG.CAPABILITY_WAIT_MS);
-		if (!vm || typeof vm.load !== 'function' || !('pollTimer' in vm)) { log('speed-up mode 2: the page component (or its load() and timer) is not there, so its timer was left alone'); return false; }
-		clearInterval(vm.pollTimer);
-		vm.pollTimer = setInterval(() => vm.load({ silent: true }), CONFIG.FAST_POLL_MS);
-		log(`speed-up mode 2: the page now refreshes its list every ${CONFIG.FAST_POLL_MS} ms`);
-		return true;
 	}
 
 	/**
@@ -369,6 +390,11 @@
 		return `${days ? days + (days === 1 ? ' day ' : ' days ') : ''}${pad(Math.floor(total % 86400 / 3600))}:${pad(Math.floor(total % 3600 / 60))}:${pad(total % 60)}`;
 	}
 
+	/** The titles of the shows the list page is showing (read from the page, nothing is sent). */
+	function pageShowTitles() {
+		return [...document.querySelectorAll(SEL.card)].map((card) => ((card.querySelector(SEL.cardTitle) || {}).textContent || '').trim()).filter(Boolean);
+	}
+
 	/** The href of the chosen show's "Register Now" link on the list page, or null. */
 	function pageRegisterLink(show) {
 		for (const card of document.querySelectorAll(SEL.card)) {
@@ -381,10 +407,12 @@
 
 	async function listStage() {
 		const show = SHOWS[CONFIG.SHOW];
-		let lastApiCheck = 0;
 		let lastWaitingLog = '';
 		let waitingNote = '';   // the latest poll result, shown under the countdown once the rapid polling has started
-		let ownPoll = true;   // does the script fetch the list itself? Not in mode 2, which relies on the page's own (sped-up) polling
+		let nameProblem = '';   // set when the page lists shows but none matches the chosen show (checked during the wait, so there is time to fix it)
+		let lastNameCheck = 0;
+		let listErrors = 0;     // rapid polling: list requests in a row that failed or got no answer
+		let listErrorText = '';
 		let goingTo = null;
 		// The speed-up mode in use. With 'auto' it is decided from what the page offers: during the countdown (so it shows on screen long before
 		// the open) and again when the rapid polling starts.
@@ -419,11 +447,38 @@
 			});
 		}
 
+		/** Compares the shows the page lists (coming soon ones too) with the chosen show. Looks at the page only, about once a second. */
+		function checkShowNames() {
+			if (Date.now() - lastNameCheck < 1000) return;
+			lastNameCheck = Date.now();
+			const titles = pageShowTitles();
+			const problem = titles.length && !titles.some((title) => show.re.test(title))
+				? `None of the shows on the page matches "${show.label}" (the page lists: ${titles.map((t) => `"${t}"`).join(', ')}). Choose the right show in the settings panel (top right) and reload the page.`
+				: '';
+			if (problem !== nameProblem) { nameProblem = problem; log(problem || 'the show names on the page match the chosen show again'); }
+		}
+
 		function go(url, how) {
 			if (goingTo) return;
 			goingTo = url;
 			banner(`"${show.label}" is open (${how}). Opening the registration page...`, 'ok');
-			location.assign(url);
+			navigateWithRetry(url);
+		}
+
+		/** Goes to the registration page. The list page (and this script) stays alive until the new page starts to arrive, so if nothing has arrived
+		 *  after CONFIG.NAVIGATE_TIMEOUT_MS the navigation is started again (a new navigation cancels the stuck one), CONFIG.NAVIGATE_ATTEMPTS tries in all.
+		 *  Once the new page arrives this document is gone and the loop stops with it. Nothing has been submitted yet, so repeating is safe. */
+		async function navigateWithRetry(url) {
+			const tries = CONFIG.NAVIGATE_ATTEMPTS;
+			for (let attempt = 1; attempt <= tries; attempt++) {
+				location.assign(url);
+				await sleep(CONFIG.NAVIGATE_TIMEOUT_MS);
+				if (attempt < tries) {
+					log(`the registration page did not start to arrive within ${CONFIG.NAVIGATE_TIMEOUT_MS / 1000} s (try ${attempt} of ${tries}); asking again`);
+					await banner(`The registration page did not answer within ${CONFIG.NAVIGATE_TIMEOUT_MS / 1000} s. Trying again (try ${attempt + 1} of ${tries})...`, 'warn');
+				}
+			}
+			await banner(`The registration page did not answer after ${tries} tries. Reload this page, or open ${url} yourself.`, 'error');
 		}
 
 		/** Redraws the status box: the show, the countdown to the open time, the speed-up mode, and what the script is doing. rapid = the rapid polling has
@@ -434,29 +489,35 @@
 			const opensAt = openAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
 			const left = formatCountdown(msLeft);
 			const speedupText = speedupDecided ? `mode ${speedup} (${speedupWhy})` : speedupWhy;
-			const modeColor = { 2: '#2e7d32', 1: '#f9a825', 0: '#546e7a' }[speedup];
+			const modeColor = { 1: '#f9a825', 0: '#546e7a' }[speedup];
 			const reached = msLeft <= 0;
 			let doing;   // the last line: what is going on now
 			if (!rapid) doing = `Rapid polling starts ${CONFIG.RAPID_POLL_LEAD_SECONDS} s before opening.`;
 			else if (reached) doing = `Open time reached. ${waitingNote || 'Waiting for the page to show the link...'}`;
-			else doing = `Rapid polling: ${waitingNote || (speedup === 2 ? 'the page refreshes its own list.' : 'asking the list ourselves...')}`;
+			else doing = `Rapid polling: ${waitingNote || 'asking the list ourselves...'}`;
+			const warnings = [];   // things to fix or look at, shown under the rest
+			if (nameProblem) warnings.push(nameProblem);
+			if (rapid && listErrors >= 2) warnings.push(`The show list is not answering properly: ${listErrorText} (${listErrors} requests in a row).`);
 			await banner(
-				`"${show.label}" opens ${opensAt}${testOpenAt ? ' (TEST)' : ''}\nCountdown  ${left}\nSpeed-up: ${speedupText}\n${doing}`,
-				'info', true,
+				`"${show.label}" opens ${opensAt}${testOpenAt ? ' (TEST)' : ''}\nCountdown  ${left}\nSpeed-up: ${speedupText}\n${doing}${warnings.map((w) => '\n' + w).join('')}`,
+				warnings.length ? 'warn' : 'info', true,
 				`<div style="font-size:13px"><b>${esc(show.label)}</b> opens ${esc(opensAt)}${testOpenAt ? ' ' + chip('TEST', '#ffd54f', '#222') : ''}</div>` +
 				`<div style="margin:3px 0"><span style="opacity:.85">Countdown</span> <span style="font:700 26px/1.15 Consolas,monospace;letter-spacing:1px;background:rgba(0,0,0,.28);border-radius:4px;padding:0 8px">${esc(left)}</span>` +
 				`${rapid ? ' ' + chip(reached ? 'OPEN TIME REACHED' : 'RAPID POLLING', reached ? '#2e7d32' : '#b26a00') : ''}</div>` +
 				`<div>Speed-up: ${speedupDecided ? chip('mode ' + speedup, modeColor) + ' <span style="opacity:.85">' + esc(speedupWhy) + '</span>' : '<span style="opacity:.85">' + esc(speedupWhy) + '</span>'}</div>` +
-				`<div style="opacity:.85">${esc(doing)}</div>`);
+				`<div style="opacity:.85">${esc(doing)}</div>` +
+				warnings.map((w) => `<div style="margin-top:4px;padding:3px 6px;background:rgba(0,0,0,.35);border-left:4px solid #ff5252;border-radius:3px"><b>Check this:</b> ${esc(w)}</div>`).join(''));
 		}
 
 		// ---- before the rapid polling: only a countdown on screen (and the cheap look at the page below, which sends nothing) ----
 		const stageStart = Date.now();
 		let lastCapabilityCheck = 0;
 		let lastCountdownLog = 0;
+		keepOpenWarning = true;   // the warning is shown during this first wait only
 		while (Date.now() < rapidFrom && !goingTo) {
 			const link = pageRegisterLink(show);
 			if (link) { go(link, 'page'); break; }
+			checkShowNames();
 			if (CONFIG.SPEEDUP === 'auto' && Date.now() - lastCapabilityCheck >= 2000) {
 				lastCapabilityCheck = Date.now();
 				const best = bestSpeedup();
@@ -474,6 +535,7 @@
 			await drawStatus(false);
 			await sleep(250);
 		}
+		keepOpenWarning = false;
 		if (!goingTo) {
 			if (CONFIG.SPEEDUP === 'auto') {   // the latest look at the page decides
 				const best = bestSpeedup();
@@ -482,66 +544,88 @@
 			}
 			log(`Rapid polling started (speed-up mode ${speedup}). Waiting for "${show.label}" to open...`);
 			await drawStatus(true);
-			ownPoll = speedup !== 2;
-			if (speedup === 2) installFastPageTimer().then((ok) => {
-				if (!ok) {   // could not take over the page's timer after all: poll ourselves, with whatever the page still allows
-					const best = bestSpeedup();
-					speedup = best.mode === 2 ? 0 : best.mode; ownPoll = true;
-					log(`speed-up mode 2: falling back to our own polling, speed-up mode ${speedup}`);
-				}
-			});
 		}
 
+		// ---- the rapid polling ----
+		// A new list request every FAST_POLL_MS, started by a timer and NOT awaited, so a slow or hung request cannot hold up the next one. Each request
+		// is cancelled after POLL_TIMEOUT_MS, at most MAX_POLLS_IN_FLIGHT are out at once, and the first answer that shows the show open wins: the
+		// others are cancelled. An older request that answers late never overwrites what a newer one put on screen.
+		const polls = new Set();   // the AbortController of every request in flight
+		let found = false;         // a winner has been picked
+		let newestShown = 0;       // start time of the newest request whose answer was put on screen
+		function abortPolls(keep) { for (const controller of polls) if (controller !== keep) controller.abort(); }
+
+		/** The answer of one list request (startedAt = when it was sent; controller = its own, which stays alive while the winner is handled). */
+		async function handleList(events, startedAt, controller) {
+			if (found || goingTo) return;
+			listErrors = 0;   // an answer arrived
+			const event = events.find((e) => show.re.test(e.name || ''));
+			if (event && event.status === 'open' && event.register_url) {
+				found = true;
+				abortPolls(controller);   // the first answer that shows the show open wins; the other requests are not needed
+				log(`"${event.name}" is open (the answer to the request sent ${Date.now() - startedAt} ms ago)`);
+				if (speedup === 1) {
+					// mode 1: show the page what we found and follow its own link; if that cannot be done, redirect ourselves (mode 0)
+					const pushed = usePageVm((vm) => {
+						if (typeof vm.$set !== 'function') throw new Error('the page component has no $set()');
+						vm.$set(vm, 'events', events);
+						log('speed-up mode 1: pushed the events into the page');
+					});
+					if (pushed) {
+						const pageLink = await waitFor(() => pageRegisterLink(show), CONFIG.PUSH_WAIT_MS, 25);
+						if (pageLink) go(pageLink, 'page, after pushing the events');
+						else log(`speed-up mode 1: no link on the page ${CONFIG.PUSH_WAIT_MS} ms after the push; redirecting with register_url`);
+					}
+				}
+				go(event.register_url, 'API');
+				return;
+			}
+			if (startedAt < newestShown) return;   // an older request answering late: what is on screen is newer
+			newestShown = startedAt;
+			let waiting;
+			if (!event) waiting = `Waiting... no event named like "${show.label}" in the list yet.`;
+			else {
+				const seats = event.capacity != null ? ` (${event.attending_count}/${event.capacity})` : '';   // the Oct 1 list has no seat counts
+				waiting = `Waiting for "${event.name}": status "${event.status}"${seats}.`;
+			}
+			if (waiting !== lastWaitingLog) { lastWaitingLog = waiting; log(waiting); }   // the console gets a line only when the status changes
+			waitingNote = event ? `${waiting} Last check ${new Date().toLocaleTimeString()}` : waiting;
+		}
+
+		function startPoll() {
+			if (found || goingTo || Date.now() >= deadline) return;
+			if (polls.size >= CONFIG.MAX_POLLS_IN_FLIGHT) return;   // every slot is taken by a slow request: wait for one to answer or time out
+			const controller = new AbortController();
+			polls.add(controller);
+			const startedAt = Date.now();
+			const timer = setTimeout(() => controller.abort(), CONFIG.POLL_TIMEOUT_MS);
+			(async () => {
+				const response = await fetch(LIST_API, { headers: { Accept: 'application/json' }, credentials: 'omit', signal: controller.signal });
+				if (!response.ok) throw new Error(`HTTP ${response.status}`);
+				const events = (await response.json()).events || [];   // the same signal also cuts off an answer that never finishes
+				await handleList(events, startedAt, controller);
+			})().catch((e) => {
+				if (controller.signal.aborted) {
+					if (!found && !goingTo) { listErrors++; listErrorText = `no answer within ${CONFIG.POLL_TIMEOUT_MS / 1000} s`; log(`list check: ${listErrorText}, cancelled`); }
+					return;
+				}
+				listErrors++; listErrorText = (e && e.message) || String(e);   // "HTTP 403" and the like
+				log('list check failed', e);
+			}).finally(() => { clearTimeout(timer); polls.delete(controller); });
+		}
+
+		let pollTimer = null;
+		if (!goingTo) { startPoll(); pollTimer = setInterval(startPoll, CONFIG.FAST_POLL_MS); }
 		while (Date.now() < deadline && !goingTo) {
-			// (a) the page itself: a card for the chosen show that has a "Register Now" link
+			// the page itself (its own refresh, or what we pushed into it): a card for the chosen show that has a "Register Now" link
 			const link = pageRegisterLink(show);
 			if (link) go(link, 'page');
-
-			// mode 2 has no poll of its own: if the page has shown no link WATCHDOG_MS after the open time, start polling ourselves too
-			if (speedup === 2 && !ownPoll && !goingTo && Date.now() > openAt.getTime() + CONFIG.WATCHDOG_MS) {
-				ownPoll = true;
-				log(`speed-up mode 2: no link on the page ${CONFIG.WATCHDOG_MS} ms after the open time; polling ourselves as well`);
-			}
-
-			// (b) the same list the page loads, asked directly and more often than the page's own 20 s refresh
-			if (!goingTo && ownPoll && CONFIG.FAST_POLL_MS > 0 && Date.now() - lastApiCheck >= CONFIG.FAST_POLL_MS) {
-				lastApiCheck = Date.now();
-				try {
-					const response = await fetch(LIST_API, { headers: { Accept: 'application/json' }, credentials: 'omit' });
-					const events = (await response.json()).events || [];
-					const event = events.find((e) => show.re.test(e.name || ''));
-					if (!event) {
-						const waiting = `Waiting... no event named like "${show.label}" in the list yet.`;
-						if (waiting !== lastWaitingLog) { lastWaitingLog = waiting; log(waiting); }
-						waitingNote = waiting;
-					}
-					else if (event.status === 'open' && event.register_url) {
-						if (speedup === 1) {
-							// mode 1: show the page what we found and follow its own link; if that cannot be done, redirect ourselves (mode 0)
-							const pushed = usePageVm((vm) => {
-								if (typeof vm.$set !== 'function') throw new Error('the page component has no $set()');
-								vm.$set(vm, 'events', events);
-								log('speed-up mode 1: pushed the events into the page');
-							});
-							if (pushed) {
-								const pageLink = await waitFor(() => pageRegisterLink(show), CONFIG.PUSH_WAIT_MS, 25);
-								if (pageLink) go(pageLink, 'page, after pushing the events');
-								else log(`speed-up mode 1: no link on the page ${CONFIG.PUSH_WAIT_MS} ms after the push; redirecting with register_url`);
-							}
-						}
-						go(event.register_url, 'API');
-					}
-					else {
-						const seats = event.capacity != null ? ` (${event.attending_count}/${event.capacity})` : '';   // the Oct 1 list has no seat counts
-						const waiting = `Waiting for "${event.name}": status "${event.status}"${seats}.`;
-						if (waiting !== lastWaitingLog) { lastWaitingLog = waiting; log(waiting); }   // the console gets a line only when the status changes
-						waitingNote = `${waiting} Last check ${new Date().toLocaleTimeString()}`;
-					}
-				} catch (e) { log('list check failed', e); }
-			}
+			checkShowNames();
 			if (!goingTo) await drawStatus(true);   // every pass: the countdown keeps running until the open time
 			await sleep(250);
 		}
+		clearInterval(pollTimer);
+		abortPolls();
 		if (!goingTo) await banner(`Gave up after ${CONFIG.GIVE_UP_AFTER_MIN} minutes.`, 'warn');
 	}
 
@@ -551,7 +635,11 @@
 	/** Why the registration page is not going to load, or null. (The page's own journey call failed, or it shows its error screen.) */
 	function registrationFailure() {
 		if (journeyFailure) return `the journey call failed (${journeyFailure})`;
-		if (/no longer available|link has expired/i.test(pageText())) return 'the page says the link is no longer available';
+		const text = pageText();
+		if (/no longer available|link has expired/i.test(text)) return 'the page says the link is no longer available';
+		if (/just a moment|checking your browser|verify(ing)? you are (a )?human|attention required|enable javascript and cookies/i.test(text)) return 'the page shows a Cloudflare check ("verify you are human")';
+		if (document.querySelector('input[type="password"]')) return 'the page shows a sign-in form';
+		if (/\b(502 bad gateway|503 service (temporarily )?unavailable|504 gateway time-?out)\b|error 10\d\d|access denied/i.test(text)) return 'the page shows a server error page';
 		return null;
 	}
 
@@ -649,6 +737,7 @@
 		sessionStorage.setItem(submittedKey, new Date().toISOString());
 		await banner('Submitting...');
 		clickButton(submit);
+		watchRsvpAnswer();
 		// The outcome is reported by the fetch recorder above (recordRsvp).
 	}
 
