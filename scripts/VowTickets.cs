@@ -13,13 +13,20 @@
 // Default:  a dry run in mode 2. The steps before the RSVP are sent, then the RSVP request is printed but NOT sent. Add --submit to send it.
 // --list:   print every event (uuid, start, status, seats, name) after step 1 and stop. Skips the wait for the run time.
 // --nowait: skip the wait for the run time (Thursday 09:59:59 for SNL configs) and start right away.
+// Retries: 5xx answers and network errors are retried one try at a time. The first events list and the journey load keep trying every second for
+//           up to 12 s; the RSVP gets up to 5 tries, 2 s apart, and none when the rate limit counter is low (see RsvpMaxAttempts and the constants at the top).
+// --replay-server PORT|URL: test against the local replay server (replay-server/ReplayServer.cs) instead of the real vow.app. PORT is shorthand for
+//           http://localhost:PORT. The API, the registration page and the listing page are all that one origin. The Pusher connection (mode 3) is
+//           skipped (the replay server has none) and the wait for the run time is skipped (the replay server decides when the show opens; see its
+//           /__replay/open-in/N). Nothing is sent to the real site.
 // Choosing: --event picks by uuid; --title picks the first upcoming event whose name contains TEXT (any case);
 //           with neither, the first event that is open, has seats and has not passed is used.
 // --mode:   what is sent once the event is open (all modes first poll the events list until it is open):
 //           1 (or min, minimal) = just the RSVP. Fastest; plus_ones is not checked against the journey's limit (assumed 1, as seen 2026-09-24 and 2026-10-01).
 //           2 (or partial) = load the journey (load-for-visitor), then the RSVP. (default)
 //           3 (or full) = copy the browser: page view (not waited for), auth check, load the journey, Pusher WebSocket (for X-Socket-ID),
-//               log-interaction for the landing page and the Continue click, the RSVP, then log-interaction for the result.
+//               log-interaction for the landing page and the Continue click (sent WITHOUT waiting for the answers, like the page: it does
+//               not await them either), the RSVP, then log-interaction for the result (also not waited for; the log is completed at the end).
 //           Whether modes 1 and 2 are enough is untested against an event that has room (see below).
 //           Mode 3 sends every call after the event opens, in the browser's order. The auth check and the Pusher connection do not
 //           depend on the event, so they COULD be sent during the polling to save time at the opening; see steps 3 and 5.
@@ -52,6 +59,18 @@ var JsonOptions = new JsonSerializerOptions {
 
 const string ForSNL = "forSNL";
 
+// ---- Retries after server errors (5xx) and network errors. Everything below is one at a time: nothing is ever sent twice at once. ----
+// Read-only calls (the first events list, the journey): retry every RetryDelayMs for up to RetryBudgetSeconds counted from the first try,
+// so a spell of server errors of up to about 10 s is survived.
+const int RetryDelayMs = 1000;
+const int RetryBudgetSeconds = 12;
+// The RSVP is rate limited (x-ratelimit-limit 10 per window, shared) and a repeat of a request that may have got through could double-register,
+// so it gets few tries, spaced further apart, and none once the limit's counter is low. Only 5xx answers and network errors are retried;
+// 422 (full), 429 (rate limited) and the other 4xx never are. 5 tries 2 s apart survive about 8 s of errors, more when the errors are slow.
+const int RsvpMaxAttempts = 5;
+const int RsvpRetryDelayMs = 2000;
+const int RsvpMinRateRemaining = 3;
+
 var context = new Context();
 var runConfig = new RunConfig();
 Func<VowEvent, bool> available = e => e.IsOpen && e.SlotsAvailable > 0 && !e.HasPassed;
@@ -59,9 +78,10 @@ Func<VowEvent, bool> selector = available;
 DateTime runTime = DateTime.Now;
 DateTime scriptStart = DateTime.Now;
 
-const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]";
+const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--replay-server PORT|URL]";
 string? configArg = null;
 string? seriesOverride = null;
+string? replayServer = null;
 int? groupSizeOverride = null;
 Func<VowEvent, bool>? selectorOverride = null;
 for (int i = 0; i < args.Length; i++) {
@@ -102,6 +122,7 @@ for (int i = 0; i < args.Length; i++) {
 		case "--submit": runConfig.Submit = true; break;
 		case "--list": runConfig.ListOnly = true; break;
 		case "--nowait": runConfig.Wait = false; break;
+		case "--replay-server" when i + 1 < args.Length: replayServer = args[++i]; break;
 		// user form info
 		case "--group-size" when i + 1 < args.Length: groupSizeOverride = int.Parse(args[++i]); break;
 
@@ -110,6 +131,18 @@ for (int i = 0; i < args.Length; i++) {
 			Console.Error.WriteLine(Usage);
 			return 2;
 	}
+}
+
+// ---- --replay-server: point everything at the local replay server (before anything is sent) ----
+if (replayServer != null) {
+	string baseUrl = replayServer.All(char.IsDigit) ? $"http://localhost:{replayServer}" : replayServer.TrimEnd('/');
+	if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var replayUri) || (replayUri.Scheme != "http" && replayUri.Scheme != "https")) {
+		Console.Error.WriteLine($"--replay-server must be a port number or an http(s) URL (got '{replayServer}').");
+		return 2;
+	}
+	Vow.UseReplayServer(baseUrl);
+	runConfig.Wait = false;
+	Console.WriteLine($"REPLAY SERVER: every call goes to {baseUrl}, not to vow.app. No Pusher, no wait for the run time.");
 }
 
 // ---- Load the config file, then apply the command-line overrides. ----
@@ -168,7 +201,9 @@ using var handler = new HttpClientHandler {
 	CookieContainer = context.CookieJar,
 	UseCookies = true,
 	AutomaticDecompression = DecompressionMethods.All,
-	MaxConnectionsPerServer = 1,
+	// With --replay-server the replay server speaks plain HTTP/1.1, where overlapping requests need a connection each (the real site's HTTP/2
+	// shares one connection between them), so allow several; one connection would queue them and hide the effect of not waiting.
+	MaxConnectionsPerServer = Vow.IsReplay ? 8 : 1,
 };
 using var http = new HttpClient(handler);
 context.Http = http;
@@ -178,6 +213,9 @@ void LogLn(string s){ logItems.Add(s); logItems.Add("\r\n"); }
 LogLn($"{scriptStart:yyyy-MM-dd HH:mm:ss.fff} SCRIPT STARTED");
 // The page view (step 2) is not awaited where it is sent; it is awaited at the end so its response still gets logged.
 Task? pageView = null;
+// The log-interaction reports (steps 6, 7 and 9) are not waited for either: the site's code sends them and carries on, and so does this
+// script. They are awaited at the end so their responses still get logged.
+var background = new List<Task>();
 
 try {
 	// ---- wait ----
@@ -227,8 +265,11 @@ try {
 	// 5-7. Pusher connection and the "visitor clicked through the landing page" calls. (mode 3 only; not proven required)
 	if (runConfig.Mode == 3) {
 		await Step5_ConnectPusher(context);		// possible early call (see the step)
-		await Step6_LogLandingView(context);
-		await Step7_LogContinueClick(context);
+		// The page does not wait for these two reports (it does not await logInteraction), so they go out together, with no wait, and
+		// the RSVP follows at once. Waiting for them cost two slow round trips before the RSVP (20.9 s against about 10 s with the replay
+		// server's --under-load).
+		background.Add(Step6_LogLandingView(context));
+		background.Add(Step7_LogContinueClick(context));
 	}
 
 	// ---- Exit Ramp ----
@@ -248,7 +289,7 @@ try {
 
 	// 9. Tell the server which step we ended on. (mode 3 only; not proven required)
 	if (runConfig.Mode == 3)
-		await Step9_LogRsvpResult(context);
+		background.Add(Step9_LogRsvpResult(context));
 
 	return 0;
 }
@@ -262,9 +303,11 @@ catch (Exception ex) {
 }
 finally {
 	ctrlCStopsCleanly = false;
-	// Give a still-running page view a few seconds to finish so its response is in the log. It never throws (RunOptionalAsync).
-	if (pageView != null && !pageView.IsCompleted)
-		await Task.WhenAny(pageView, Task.Delay(TimeSpan.FromSeconds(10)));
+	// Give a still-running page view and the log-interaction reports a few seconds to finish so their responses are in the log.
+	// They never throw (RunOptionalAsync).
+	var stillRunning = background.Append(pageView).Where(t => t != null && !t.IsCompleted).Select(t => t!).ToList();
+	if (stillRunning.Count > 0)
+		await Task.WhenAny(Task.WhenAll(stillRunning), Task.Delay(TimeSpan.FromSeconds(10)));
 	context.Pusher?.Dispose();
 
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} SCRIPT COMPLETE");
@@ -439,15 +482,36 @@ async Task Step4_LoadJourney(Context context) {
 async Task Step8_SubmitRsvp(Context context) {
 	// ---- Step 8: submit the registration. ----
 	// PUT /api/v2/events/{uuid}/attendees/rsvp   (docs/VOW_SNL_FLOW.md 5.4)
-	// - This call is NEVER retried or hedged: the endpoint is rate limited (x-ratelimit-limit: 10 per window, window and key unknown),
-	//   every duplicate counts against it, and a retry of a request that may have succeeded could double-register.
+	// - Never hedged (no duplicates in flight). Retried only after a 5xx or a network error, up to RsvpMaxAttempts tries RsvpRetryDelayMs apart, and
+	//   not when x-ratelimit-remaining is below RsvpMinRateRemaining: the endpoint is rate limited (x-ratelimit-limit: 10 per window, window and key
+	//   unknown), every try counts against it, and a retry of a request that may have succeeded could double-register (the site says only the
+	//   latest request counts for a date, but that is not proven here). 4xx answers (422 full, 429 rate limited, ...) are never retried.
 	// - 422 {"error":"This event is full.","capacity_full":true,"capacity_step_id":N} means sold out (seen in the capture).
 	// - 429 would mean the rate limit was hit (not seen). Do not retry immediately; wait for Retry-After.
 	// - Success (2xx) was never captured, so the body is printed as-is.
 	VowEvent selected = context.SelectedEvent!;
-	var request = ApiRequest(HttpMethod.Put, $"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/attendees/rsvp", Vow.GoOrigin,
-		json: context.GetRsvpJson(), useSocketId: true);
-	Reply reply = await SendAsync("8. submit RSVP", request);
+	Reply reply;
+	for (int attempt = 1; ; attempt++) {
+		// a request can only be sent once, so each try builds a new one
+		var request = ApiRequest(HttpMethod.Put, $"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/attendees/rsvp", Vow.GoOrigin,
+			json: context.GetRsvpJson(), useSocketId: true);
+		try {
+			reply = await SendAsync("8. submit RSVP", request);
+		}
+		catch (Exception ex) when (attempt < RsvpMaxAttempts && IsRetryable(ex)) {
+			Console.WriteLine($"   RSVP try {attempt} of {RsvpMaxAttempts} got no answer ({ex.Message}); it may or may not have reached the server. Trying again in {RsvpRetryDelayMs} ms");
+			await Task.Delay(RsvpRetryDelayMs);
+			continue;
+		}
+		if ((int)reply.Status < 500 || attempt >= RsvpMaxAttempts)
+			break;
+		if (int.TryParse(reply.RateRemaining, out int left) && left < RsvpMinRateRemaining) {
+			Console.WriteLine($"   RSVP try {attempt} returned {(int)reply.Status}, but only {left} requests are left in the rate limit (less than {RsvpMinRateRemaining}): not trying again.");
+			break;
+		}
+		Console.WriteLine($"   RSVP try {attempt} of {RsvpMaxAttempts} returned {(int)reply.Status}; trying again in {RsvpRetryDelayMs} ms");
+		await Task.Delay(RsvpRetryDelayMs);
+	}
 
 	if (reply.Ok) {
 		Console.ForegroundColor = ConsoleColor.Green;
@@ -515,6 +579,7 @@ async Task Step5_ConnectPusher(Context context) {
 	//   {"event":"pusher:connection_established","data":"{\"socket_id\":\"1677674.4468990\",\"activity_timeout\":120}"}
 	// The socket id is sent as X-Socket-ID on the log-interaction and RSVP calls (Laravel uses it to skip the sender when it broadcasts).
 	// No channel is subscribed to in the capture, so the socket only needs to stay open; it is disposed when the script ends.
+	if (Vow.IsReplay) { Console.WriteLine("5. connect pusher: skipped (the replay server has no Pusher; no X-Socket-ID is sent)"); return; }
 	await RunOptionalAsync("5. connect pusher", async () => {
 		var socket = new ClientWebSocket();
 		socket.Options.SetRequestHeader("Origin", Vow.GoOrigin);
@@ -714,16 +779,18 @@ Reply Require(Reply reply) {
 	throw new HttpRequestException($"returned {(int)reply.Status} {reply.Status}{hint}: {Excerpt(reply.Body, 300)}", null, reply.Status);
 }
 
-// For READ-ONLY steps only: retries after a 5xx or a network error, a few times, one at a time (no duplicates in flight).
-// Never use this for the RSVP: see Step8_SubmitRsvp and the rate-limit notes in docs/VOW_SNL_FLOW.md 5.4.
-async Task<string> SendWithRetryAsync(string label, Func<HttpRequestMessage> makeRequest, int maxAttempts = 3, int delayMs = 500) {
+// For READ-ONLY steps only: retries after a 5xx or a network error, one at a time (no duplicates in flight), RetryDelayMs apart, for up to
+// RetryBudgetSeconds from the first try. Never use this for the RSVP: it has its own, stricter retry in Step8_SubmitRsvp (rate limit,
+// docs/VOW_SNL_FLOW.md 5.4).
+async Task<string> SendWithRetryAsync(string label, Func<HttpRequestMessage> makeRequest) {
+	var budget = System.Diagnostics.Stopwatch.StartNew();
 	for (int attempt = 1; ; attempt++) {
 		try {
 			return Require(await SendAsync(label, makeRequest())).Body;
 		}
-		catch (Exception ex) when (attempt < maxAttempts && IsRetryable(ex)) {
-			Console.WriteLine($"   attempt {attempt} of {maxAttempts} failed ({ex.Message}); trying again in {delayMs} ms");
-			await Task.Delay(delayMs);
+		catch (Exception ex) when (IsRetryable(ex) && budget.Elapsed < TimeSpan.FromSeconds(RetryBudgetSeconds)) {
+			Console.WriteLine($"   attempt {attempt} failed ({ex.Message}); trying again in {RetryDelayMs} ms ({budget.Elapsed.TotalSeconds:0.0} of {RetryBudgetSeconds} s used)");
+			await Task.Delay(RetryDelayMs);
 		}
 	}
 }
@@ -762,11 +829,15 @@ public static class Vow {
 
 	// ---- Site ----
 	/// <summary>The API host, used by both front ends (docs/VOW_SNL_FLOW.md section 2).</summary>
-	public const string ApiBase = "https://api.vow.app";
+	public static string ApiBase { get; private set; } = "https://api.vow.app";
 	/// <summary>The registration single-page app. Sent as Origin/Referer on registration calls.</summary>
-	public const string GoOrigin = "https://go.vow.app";
+	public static string GoOrigin { get; private set; } = "https://go.vow.app";
 	/// <summary>The listing single-page app (iframed by snlstandby.nbcuni.com). Sent as Origin/Referer on the events-list call.</summary>
-	public const string ProOrigin = "https://pro.vow.app";
+	public static string ProOrigin { get; private set; } = "https://pro.vow.app";
+	/// <summary>True after UseReplayServer: the calls go to the local replay server (replay-server/ReplayServer.cs) instead of the real site.</summary>
+	public static bool IsReplay { get; private set; }
+	/// <summary>The replay server serves the API, the registration page and the listing page from one origin.</summary>
+	public static void UseReplayServer(string baseUrl) { ApiBase = GoOrigin = ProOrigin = baseUrl; IsReplay = true; }
 	/// <summary>The "by-url" name NBC's SNL Standby page uses in /api/v2/public/by-url/{slug}/events.</summary>
 	public const string SnlSlug = "nbc";
 
@@ -935,7 +1006,8 @@ public sealed class VowEvent {
 
 	[JsonIgnore] public bool IsOpen => Status == "open";
 	[JsonIgnore] public int SlotsAvailable => Math.Max(Capacity - AttendingCount, 0);
-	[JsonIgnore] public bool HasPassed => DateTimeOffset.Parse(StartsAt) < DateTimeOffset.UtcNow;
+	// Not checked with --replay-server: the replay server's shows are the ones from the 2026-10-01 capture, whose start times are in the past.
+	[JsonIgnore] public bool HasPassed => !Vow.IsReplay && DateTimeOffset.Parse(StartsAt) < DateTimeOffset.UtcNow;
 
 	// Other properties not used: timezone, location{...}, opens_at, closes_at, theme{...}
 }
