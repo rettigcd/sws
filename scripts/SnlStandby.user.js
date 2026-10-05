@@ -23,6 +23,8 @@
 //
 // Nothing is sent by this script itself. It only fills in the page and clicks its buttons, so the site makes the same requests as when you do it by hand.
 // The one exception is the list check in stage 1 (FAST_POLL_MS), a plain GET of the same public list the page loads.
+// It also keeps a log of every request and response the pages make (time stamps, headers, whole bodies) and saves it as a file in your downloads when
+// the run succeeds or 2 minutes after the open time (see REQUEST LOG below and CONFIG.LOG_ENABLED).
 //
 // The RSVP response is recorded (console, and localStorage key "snlRsvpLog") because a SUCCESSFUL response has never been captured.
 
@@ -88,6 +90,15 @@
 		// stage 2: after SUBMIT is clicked, if the RSVP has not been answered after this long, the banner starts to say so (and keeps counting). The script
 		// never cancels or resends an RSVP; the message only tells you to wait and not to click again.
 		RSVP_SLOW_NOTICE_MS: 10000,
+
+		// ---- REQUEST LOG ----
+		// Every request the pages make (fetch and XMLHttpRequest: time stamps, headers, whole request and response bodies) and their other downloads (timings
+		// only) are collected by the top page and saved as a file in your downloads (snl_<date>_<time>.log): after the RSVP is accepted (once the calls that follow it are answered, at most LOG_SETTLE_MS),
+		// or LOG_AFTER_OPEN_MS after the open time, whichever comes first. The RSVP body holds your name and email. false = no capture, no file.
+		// The log file is a download: if Chrome is set to ask where to save each file, it asks then.
+		LOG_ENABLED: true,
+		LOG_AFTER_OPEN_MS: 120000,
+		LOG_SETTLE_MS: 25000,   // after the RSVP is accepted: the log waits until every request has been answered (and 1.5 s have passed without news), at most this long
 
 		DEBUG: true,                        // log to the browser console
 
@@ -216,6 +227,7 @@
 		if (!(CONFIG.SCRIPT_LOAD_TIMEOUT_MS >= 1000)) return 'CONFIG.SCRIPT_LOAD_TIMEOUT_MS must be at least 1000.';
 		if (!(CONFIG.NAVIGATE_TIMEOUT_MS >= 1000)) return 'CONFIG.NAVIGATE_TIMEOUT_MS must be at least 1000.';
 		if (!(CONFIG.RSVP_SLOW_NOTICE_MS >= 1000)) return 'CONFIG.RSVP_SLOW_NOTICE_MS must be at least 1000.';
+		if (!(CONFIG.LOG_AFTER_OPEN_MS >= 1000 && CONFIG.LOG_SETTLE_MS >= 0)) return 'CONFIG.LOG_AFTER_OPEN_MS must be at least 1000 and LOG_SETTLE_MS 0 or more.';
 		if (!Number.isInteger(CONFIG.NAVIGATE_ATTEMPTS) || CONFIG.NAVIGATE_ATTEMPTS < 1) return 'CONFIG.NAVIGATE_ATTEMPTS must be a whole number, 1 or more.';
 		if (!['auto', 0, 1].includes(CONFIG.SPEEDUP)) return "CONFIG.SPEEDUP must be 'auto', 0 or 1.";
 		if (!(CONFIG.FAST_POLL_MS >= 100)) return 'CONFIG.FAST_POLL_MS must be at least 100.';
@@ -250,6 +262,409 @@
 		const inner = anchor.querySelector('strong span') || anchor.querySelector('span') || anchor.firstElementChild;
 		if (!inner) throw new Error('The button has no inner element to click.');
 		inner.click();
+	}
+
+	// =====================================================================
+	// ===================  REQUEST LOG (capture and write)  ===============
+	// =====================================================================
+	// Every fetch and XMLHttpRequest the pages make (the show list and the registration page, in the iframe) is recorded with time stamps, request and
+	// response headers (the ones the browser lets a page read) and the WHOLE request and response body, plus the pages' other downloads (scripts,
+	// styles, images: timings only, from Resource Timing). The log is written as a file (a download) when the run succeeds (RSVP accepted, after
+	// the calls that follow it have been answered, at most CONFIG.LOG_SETTLE_MS), or CONFIG.LOG_AFTER_OPEN_MS after the open time, whichever comes first.
+	//
+	// Where things live: the iframe is a new page (a new web address, so new memory and storage) each time it moves from the list to the registration
+	// page, so the pages in the iframe only CAPTURE and send what they captured to the TOP page (the one you look at, as with the profiles), which
+	// COLLECTS it and writes the file. A page that is opened on its own (no trusted page around it) collects for itself.
+	// A page cannot create a file while it is being left, so for "the user left the page" the collector keeps a copy of the log in its localStorage
+	// (saved every couple of seconds); the next time the top page opens, that copy is written out as a "_recovered" file.
+	const MSG_LOG_BATCH = 'snl-log-batch';   // frame -> top page: entries that are new or have changed
+	const MSG_LOG_OPEN = 'snl-log-open';     // frame -> top page: when the show opens (ms)
+	const MSG_LOG_DONE = 'snl-log-done';     // frame -> top page: the run succeeded: write the log after the calls that follow
+	const LOG_KEY = 'snlRequestLog';         // localStorage of the collecting page: a copy of the log, for when the page is left before the file was written
+	const documentId = Math.random().toString(36).slice(2, 8);   // tells the entries of one page load from those of another
+	const epochNow = () => performance.timeOrigin + performance.now();   // milliseconds, on one timeline for every page
+
+	// ---------- capture (in the frames that show the list and the registration page) ----------
+	let capFrame = '';
+	let capSeq = 0;
+	const capDirty = new Set();   // entries that are new or changed since the last batch
+	let capTimer = null;
+	let capSink = () => {};       // takes a batch of entries: sends it to the top page, or hands it to this page's own collector
+
+	function absoluteUrl(url) { try { return new URL(url, location.href).href; } catch (e) { return String(url); } }
+
+	function bodyText(body) {
+		if (body === undefined || body === null) return '';
+		if (typeof body === 'string') return body;
+		if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return body.toString();
+		if (typeof FormData !== 'undefined' && body instanceof FormData) return '[form data: ' + [...body.keys()].join(', ') + ']';
+		if (typeof Blob !== 'undefined' && body instanceof Blob) return `[binary body, ${body.size} bytes]`;
+		if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return `[binary body, ${body.byteLength} bytes]`;
+		return String(body);
+	}
+
+	function headersToObject(headers) {
+		const out = {};
+		try {
+			if (!headers) return out;
+			if (typeof Headers !== 'undefined' && headers instanceof Headers) headers.forEach((value, name) => { out[name] = value; });
+			else if (Array.isArray(headers)) for (const [name, value] of headers) out[name] = value;
+			else for (const name of Object.keys(headers)) out[name] = String(headers[name]);
+		} catch (e) { /* headers that cannot be read: keep what was read */ }
+		return out;
+	}
+
+	function parseRawHeaders(raw) {
+		const out = {};
+		for (const line of String(raw || '').trim().split(/\r?\n/)) {
+			const colon = line.indexOf(':');
+			if (colon > 0) out[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+		}
+		return out;
+	}
+
+	const isTextType = (type) => /json|text|xml|javascript|html|x-www-form-urlencoded|svg/i.test(type);
+
+	function captureBegin(kind, method, url, headers, body, label) {
+		const entry = { key: documentId + ':' + (++capSeq), frame: capFrame, kind, label: label || '', method, url, reqHeaders: headers, reqBody: body, tStart: epochNow(), state: 'pending' };
+		capDirty.add(entry);
+		capSchedule();
+		return entry;
+	}
+	function captureChanged(entry) { capDirty.add(entry); capSchedule(); }
+	function captureDone(entry, text) { entry.tEnd = epochNow(); entry.state = 'done'; entry.resBody = text; captureChanged(entry); }
+	function captureFail(entry, error) {
+		entry.tEnd = epochNow();
+		entry.state = error && error.name === 'AbortError' ? 'aborted' : 'failed';
+		entry.error = String((error && error.message) || error);
+		captureChanged(entry);
+	}
+	function capSchedule() { if (!capTimer) capTimer = setTimeout(capFlush, 400); }
+	function capFlush() {
+		capTimer = null;
+		if (!capDirty.size) return;
+		const batch = [...capDirty].map((entry) => ({ ...entry }));
+		capDirty.clear();
+		capSink(batch);
+	}
+
+	function captureFetch() {
+		const originalFetch = window.fetch;
+		if (typeof originalFetch !== 'function') return;
+		window.fetch = function (input, init) {
+			let entry = null;
+			try {
+				const isRequest = typeof Request !== 'undefined' && input instanceof Request;
+				const url = absoluteUrl(isRequest ? input.url : typeof input === 'string' ? input : (input && input.href) || String(input));
+				const method = String((init && init.method) || (isRequest && input.method) || 'GET').toUpperCase();
+				const headers = headersToObject((init && init.headers) || (isRequest && input.headers) || {});
+				const body = init && init.body !== undefined ? bodyText(init.body) : (isRequest ? '[body of a Request object, not readable here]' : '');
+				entry = captureBegin('fetch', method, url, headers, body, init && init.__snlLabel);   // __snlLabel: our own calls say what they are; fetch ignores it
+			} catch (e) { entry = null; }
+			let promise;
+			try { promise = originalFetch.apply(this, arguments); } catch (e) { if (entry) captureFail(entry, e); throw e; }
+			if (!entry) return promise;
+			return promise.then((response) => {
+				entry.tHeaders = epochNow();
+				entry.status = response.status;
+				entry.statusText = response.statusText;
+				entry.resHeaders = headersToObject(response.headers);
+				captureChanged(entry);
+				const type = response.headers.get('content-type') || '';
+				if (type && !isTextType(type)) {
+					const length = response.headers.get('content-length');
+					captureDone(entry, `[binary body ${type}${length ? ', ' + length + ' bytes' : ''}: not captured]`);
+				} else {
+					response.clone().text().then((text) => captureDone(entry, text), (e) => captureDone(entry, '[body not readable: ' + e + ']'));
+				}
+				return response;
+			}, (error) => { captureFail(entry, error); throw error; });
+		};
+	}
+
+	function captureXhr() {
+		const proto = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+		if (!proto) return;
+		const originalOpen = proto.open, originalSend = proto.send, originalSetHeader = proto.setRequestHeader;
+		proto.open = function (method, url) {
+			this.__snl = { method: String(method).toUpperCase(), url: absoluteUrl(url), headers: {} };
+			return originalOpen.apply(this, arguments);
+		};
+		proto.setRequestHeader = function (name, value) {
+			if (this.__snl) this.__snl.headers[name] = value;
+			return originalSetHeader.apply(this, arguments);
+		};
+		proto.send = function (body) {
+			const meta = this.__snl;
+			if (meta) {
+				const entry = captureBegin('xhr', meta.method, meta.url, meta.headers, bodyText(body), '');
+				let aborted = false;
+				this.addEventListener('readystatechange', () => { if (this.readyState === 2 && !entry.tHeaders) { entry.tHeaders = epochNow(); entry.status = this.status; } });
+				this.addEventListener('abort', () => { aborted = true; });
+				this.addEventListener('loadend', () => {
+					entry.status = this.status;
+					entry.resHeaders = parseRawHeaders(this.getAllResponseHeaders());
+					if (this.status === 0) {
+						entry.tEnd = epochNow(); entry.state = aborted ? 'aborted' : 'failed'; entry.error = 'no response (network error, blocked or cancelled)';
+						captureChanged(entry);
+						return;
+					}
+					let text;
+					try {
+						if (this.responseType === '' || this.responseType === 'text') text = this.responseText;
+						else if (this.responseType === 'json') text = JSON.stringify(this.response);
+						else text = `[${this.responseType} body: not captured]`;
+					} catch (e) { text = '[body not readable: ' + e + ']'; }
+					captureDone(entry, text);
+				});
+			}
+			return originalSend.apply(this, arguments);
+		};
+	}
+
+	/** The page's other downloads (scripts, styles, images, the page itself): timings only, no bodies. Requests made with fetch and XHR are captured in full above. */
+	function captureResources() {
+		if (typeof PerformanceObserver !== 'function') return;
+		const add = (list) => {
+			for (const r of list.getEntries()) {
+				if (r.entryType === 'resource' && (r.initiatorType === 'fetch' || r.initiatorType === 'xmlhttprequest')) continue;
+				const entry = { key: documentId + ':r' + (++capSeq), frame: capFrame, kind: r.entryType, label: r.initiatorType || r.entryType, method: 'GET', url: r.name,
+					tStart: performance.timeOrigin + r.startTime, tEnd: performance.timeOrigin + (r.responseEnd || r.startTime + r.duration), status: r.responseStatus || 0, state: 'done',
+					bytes: r.transferSize, protocol: r.nextHopProtocol };
+				capDirty.add(entry);
+			}
+			capSchedule();
+		};
+		for (const type of ['resource', 'navigation']) {
+			try { new PerformanceObserver(add).observe({ type, buffered: true }); } catch (e) { /* this kind is not supported */ }
+		}
+	}
+
+	/** The web address of the page around this frame if it is one we trust to take the log; otherwise null (this page then keeps its own log). */
+	function trustedTopOrigin() {
+		if (window.top === window) return null;
+		const origins = location.ancestorOrigins;
+		const origin = origins && origins.length ? origins[origins.length - 1] : '';   // the last one is the outermost page
+		return origin === 'https://snlstandby.nbcuni.com' || isLocalOrigin(origin) ? origin : null;
+	}
+
+	function installCapture(frameName) {
+		if (!CONFIG.LOG_ENABLED) return;
+		capFrame = frameName;
+		const topOrigin = trustedTopOrigin();
+		capSink = topOrigin ? (batch) => window.top.postMessage({ type: MSG_LOG_BATCH, frame: frameName, entries: batch }, topOrigin) : (batch) => collectorAdd(batch);
+		captureFetch();
+		captureXhr();
+		captureResources();
+		window.addEventListener('pagehide', () => { clearTimeout(capTimer); capFlush(); });   // the last news of this page goes out before the page is gone
+	}
+
+	/** Tells the collector when the show opens (it writes the log CONFIG.LOG_AFTER_OPEN_MS later if the run has not succeeded by then). */
+	function reportOpenTime(ms) {
+		if (!CONFIG.LOG_ENABLED) return;
+		const topOrigin = trustedTopOrigin();
+		if (topOrigin) window.top.postMessage({ type: MSG_LOG_OPEN, openAtMs: ms }, topOrigin);
+		else collectorSetOpen(ms);
+	}
+
+	/** Tells the collector the run succeeded: it writes the log when the calls that follow the RSVP have been answered (at most CONFIG.LOG_SETTLE_MS). */
+	function signalLogDone(reason) {
+		if (!CONFIG.LOG_ENABLED) return;
+		const topOrigin = trustedTopOrigin();
+		if (topOrigin) window.top.postMessage({ type: MSG_LOG_DONE, reason, settleMs: CONFIG.LOG_SETTLE_MS }, topOrigin);
+		else collectorDone(reason, CONFIG.LOG_SETTLE_MS);
+	}
+
+	// ---------- collector (the top page; a page that is opened on its own collects for itself) ----------
+	const collector = { entries: new Map(), openAtMs: null, finalized: false, afterOpenTimer: null, doneTimer: null, persistTimer: null, lastChange: Date.now(), persisted: false };
+
+	function collectorAdd(batch) {
+		if (collector.finalized) return;
+		for (const entry of batch) collector.entries.set(entry.key, entry);
+		collector.lastChange = Date.now();
+		collectorPersistSoon();
+	}
+
+	function collectorSetOpen(ms) {
+		if (collector.finalized || !Number.isFinite(ms)) return;
+		collector.openAtMs = ms;
+		clearTimeout(collector.afterOpenTimer);
+		let wait = ms + CONFIG.LOG_AFTER_OPEN_MS - Date.now();
+		if (wait < 0) wait = 30000;   // that moment has already passed (a late start): the run gets 30 s
+		collector.afterOpenTimer = setTimeout(() => collectorFinalize(`${Math.round(CONFIG.LOG_AFTER_OPEN_MS / 1000)} s after the open time, without a successful RSVP`), wait);
+		collectorPersistSoon();
+	}
+
+	/** The run succeeded: the log is written once every request has been answered and 1.5 s have passed without news (the calls that follow the RSVP are slow
+	 *  at the go-live), or after maxMs, whichever comes first. */
+	function collectorDone(reason, maxMs) {
+		if (collector.finalized || collector.doneTimer) return;
+		const startedAt = Date.now();
+		collector.doneTimer = setInterval(() => {
+			const pending = [...collector.entries.values()].some((e) => (e.kind === 'fetch' || e.kind === 'xhr') && e.state === 'pending');
+			if ((!pending && Date.now() - collector.lastChange >= 1500) || Date.now() - startedAt >= maxMs) collectorFinalize(reason);
+		}, 500);
+	}
+
+	/** A log is worth keeping once the run has really started: the registration page or the RSVP was seen, or the open time is (nearly) here. */
+	function collectorWorthKeeping() {
+		return [...collector.entries.values()].some((e) => e.frame === 'registration' || /\/attendees\/rsvp|\/load-for-visitor/.test(e.url))
+			|| (collector.openAtMs !== null && Date.now() > collector.openAtMs - 5000);
+	}
+
+	function collectorPersistSoon() { if (!collector.persistTimer) collector.persistTimer = setTimeout(collectorPersist, 2000); }
+
+	/** Keeps a copy of the log in localStorage, for when the page is left before the file was written. Smaller copies are tried if it does not fit. */
+	function collectorPersist() {
+		clearTimeout(collector.persistTimer);
+		collector.persistTimer = null;
+		if (collector.finalized) return;
+		if (!collectorWorthKeeping()) {
+			if (collector.persisted) { try { localStorage.removeItem(LOG_KEY); collector.persisted = false; } catch (e) { /* storage blocked */ } }   // only a copy this collector wrote itself
+			return;
+		}
+		const shrinks = [
+			(e) => e,
+			(e) => ({ ...e, resBody: typeof e.resBody === 'string' && e.resBody.length > 2000 ? e.resBody.slice(0, 2000) + '...[cut to save space]' : e.resBody }),
+			(e) => (e.kind === 'resource' || e.kind === 'navigation') ? null : { ...e, resBody: undefined, reqBody: undefined },
+		];
+		for (const shrink of shrinks) {
+			try {
+				const entries = [...collector.entries.values()].map(shrink).filter(Boolean);
+				localStorage.setItem(LOG_KEY, JSON.stringify({ v: 1, savedAt: Date.now(), openAtMs: collector.openAtMs, entries }));
+				collector.persisted = true;
+				return;
+			} catch (e) { /* too big, or storage blocked: try a smaller copy */ }
+		}
+	}
+
+	/** The top page, when it opens: a copy left by a page that was left (or reloaded) before its log was written is taken now (so this page's own copy can not
+	 *  overwrite it) and written out as soon as the page has a body to hang the download on. */
+	function recoverPreviousLog() {
+		let saved = null;
+		try { saved = JSON.parse(localStorage.getItem(LOG_KEY) || 'null'); localStorage.removeItem(LOG_KEY); } catch (e) { return; }
+		if (!saved || !Array.isArray(saved.entries) || !saved.entries.length) return;
+		const reason = `recovered: the page was left or reloaded before the log was written (copy saved ${new Date(saved.savedAt).toLocaleString()})`;
+		waitFor(() => document.body, 15000, 100).then((body) => {
+			if (body) downloadText(logFileName(saved.savedAt, '_recovered'), buildLogText(saved.entries, saved.openAtMs, reason));
+		});
+	}
+
+	/** Writes the log file. byHand = from the settings panel: the run is not ended by it. */
+	function collectorFinalize(reason, byHand = false) {
+		if (!byHand && collector.finalized) return;
+		const ok = downloadText(logFileName(Date.now(), byHand ? '_by-hand' : ''), buildLogText([...collector.entries.values()], collector.openAtMs, reason));
+		if (byHand) return ok;
+		collector.finalized = true;
+		clearTimeout(collector.afterOpenTimer); clearInterval(collector.doneTimer); clearTimeout(collector.persistTimer);
+		try { localStorage.removeItem(LOG_KEY); } catch (e) { /* storage blocked */ }
+		log('request log written: ' + reason);
+		return ok;
+	}
+
+	function startLogCollector() {
+		if (!CONFIG.LOG_ENABLED) return;
+		if (window.top === window) {
+			window.addEventListener('message', (event) => {
+				const data = event.data;
+				if (!data || typeof data.type !== 'string' || !data.type.startsWith('snl-log-')) return;
+				if (event.origin !== 'https://pro.vow.app' && event.origin !== 'https://go.vow.app' && !isLocalOrigin(event.origin)) return;
+				if (!Array.prototype.some.call(window.frames, (frame) => frame === event.source)) return;   // only from the frames of this page
+				if (data.type === MSG_LOG_BATCH && Array.isArray(data.entries)) collectorAdd(data.entries.filter((e) => e && typeof e.key === 'string' && typeof e.url === 'string'));
+				else if (data.type === MSG_LOG_OPEN) collectorSetOpen(Number(data.openAtMs));
+				else if (data.type === MSG_LOG_DONE) collectorDone(String(data.reason || 'the run succeeded').slice(0, 200), Math.min(Math.max(Number(data.settleMs) || 0, 0), 120000));
+			});
+			recoverPreviousLog();
+		}
+		if (window.top === window || !trustedTopOrigin()) window.addEventListener('pagehide', collectorPersist);   // a frame whose entries go to the top page keeps no copy
+	}
+
+	// ---------- writing the file ----------
+	function logFileName(ms, suffix) {
+		const d = new Date(ms);
+		const p = (n) => String(n).padStart(2, '0');
+		return `snl_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}${suffix || ''}.log`;
+	}
+
+	/** Saves text as a file by clicking a temporary download link. Done by the collecting page (the top page), where downloads are not blocked. */
+	function downloadText(filename, text) {
+		try {
+			const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+			const link = document.createElement('a');
+			link.href = url; link.download = filename; link.style.display = 'none';
+			(document.body || document.documentElement).appendChild(link);
+			link.click();
+			setTimeout(() => { link.remove(); URL.revokeObjectURL(url); }, 10000);
+			log(`log file written to the downloads: ${filename} (${text.length} characters)`);
+			return true;
+		} catch (e) { log('could not write the log file', e); return false; }
+	}
+
+	/** The text of the log: a header, every request and response (and file download) in the order they happened, and a summary. The layout follows VowTickets' log. */
+	function buildLogText(entries, openAtMs, reason) {
+		const pad = (n, width = 2) => String(n).padStart(width, '0');
+		const stamp = (ms) => { const d = new Date(Math.round(ms)); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`; };
+		const headerLines = (headers) => Object.keys(headers || {}).map((name) => `${name}: ${headers[name]}`);
+		const writtenAt = Date.now();
+		const sorted = [...entries].sort((a, b) => a.tStart - b.tStart);
+		const events = [];
+		const lastBody = new Map();   // "METHOD url" -> { id, body } of the latest answered request, so a body that repeats is not written again
+		const slowest = [];
+		const noAnswer = [];
+		let number = 0, requests = 0, files = 0;
+		for (const e of sorted) {
+			if (e.kind === 'fetch' || e.kind === 'xhr') {
+				requests++;
+				const id = ++number;
+				const tag = `[${e.frame} ${e.kind}${e.label ? ', ' + e.label : ''}]`;
+				events.push({ t: e.tStart, text: [`${stamp(e.tStart)} REQUEST #${id} ${tag}`, `${e.method} ${e.url}`, ...headerLines(e.reqHeaders), '', e.reqBody || ''].join('\n') });
+				if (e.state === 'done') {
+					const ms = Math.round(e.tEnd - e.tStart);
+					slowest.push({ ms, text: `#${id} ${e.method} ${e.url} -> ${e.status}` });
+					let body = e.resBody === undefined ? '' : e.resBody;
+					const key = e.method + ' ' + e.url;
+					const previous = lastBody.get(key);
+					if (previous && previous.body === body && body.length > 200) body = `[same body as RESPONSE #${previous.id}]`;
+					else lastBody.set(key, { id, body });
+					const toHeaders = e.tHeaders ? `   (headers after ${Math.round(e.tHeaders - e.tStart)} ms)` : '';
+					events.push({ t: e.tEnd, text: [`${stamp(e.tEnd)} RESPONSE #${id} after ${ms} ms${toHeaders}`, `HTTP ${e.status}${e.statusText ? ' ' + e.statusText : ''}`, ...headerLines(e.resHeaders), '', body].join('\n') });
+				} else if (e.state === 'failed' || e.state === 'aborted') {
+					const ms = Math.round(e.tEnd - e.tStart);
+					events.push({ t: e.tEnd, text: `${stamp(e.tEnd)} NO RESPONSE #${id} after ${ms} ms (${e.state === 'aborted' ? 'cancelled' : 'failed'}): ${e.error || ''}` });
+					noAnswer.push(`#${id} ${e.method} ${e.url} (${e.state === 'aborted' ? 'cancelled' : 'failed'} after ${ms} ms)`);
+				} else {
+					const ms = Math.round(writtenAt - e.tStart);
+					events.push({ t: writtenAt, text: `${stamp(writtenAt)} NO RESPONSE #${id}: nothing had been received after ${ms} ms when the log was written (the page may have been left)` });
+					noAnswer.push(`#${id} ${e.method} ${e.url} (no answer after ${ms} ms)`);
+				}
+			} else {
+				files++;
+				const ms = Math.round(e.tEnd - e.tStart);
+				slowest.push({ ms, text: `${e.label} ${e.url}` });
+				events.push({ t: e.tEnd, text: `${stamp(e.tEnd)} FILE [${e.frame} ${e.label}] ${e.url}  HTTP ${e.status || '?'}  ${ms} ms  ${e.bytes != null ? e.bytes + ' bytes  ' : ''}${e.protocol || ''}` });
+			}
+		}
+		events.sort((a, b) => a.t - b.t);
+		slowest.sort((a, b) => b.ms - a.ms);
+		const first = sorted.length ? stamp(sorted[0].tStart) : '-';
+		const last = events.length ? stamp(events[events.length - 1].t) : '-';
+		return [
+			'SNL Standby request log (SnlStandby.user.js)',
+			`Written:     ${stamp(writtenAt)}, because: ${reason}`,
+			`Show opens:  ${openAtMs ? stamp(openAtMs) : 'not known'}`,
+			`Covers:      ${first}  to  ${last}`,
+			`Contents:    ${requests} requests (fetch / XHR, with headers and whole bodies) and ${files} file downloads (timings only)`,
+			'Times are this computer\'s local time. A REQUEST and its RESPONSE share a number; FILE lines are downloads the pages made (scripts, styles, images, the page itself).',
+			'Only headers the browser lets a page read are here: no cookies, and cross-origin answers show only the headers the server exposes.',
+			'',
+			...events.map((ev) => ev.text + '\n'),
+			'=== Summary ===',
+			'Slowest:',
+			...slowest.slice(0, 10).map((s) => `  ${(s.ms / 1000).toFixed(2)} s  ${s.text}`),
+			noAnswer.length ? 'No answer:' : 'No answer: none',
+			...noAnswer.map((s) => '  ' + s),
+			'',
+		].join('\n');
 	}
 
 	// =====================================================================
@@ -331,6 +746,7 @@
 		try { localStorage.setItem('snlRsvpLog', JSON.stringify(window.__snlRsvpLog)); } catch (e) { /* storage blocked */ }
 		log('RSVP response', entry);
 		if (entry.status >= 200 && entry.status < 300) {
+			signalLogDone('RSVP accepted');   // the request log is written once the calls that follow have been answered
 			const took = entry.msAfterOpen !== undefined ? formatDuration(entry.msAfterOpen) : null;
 			banner(`RSVP accepted (HTTP ${entry.status})${took ? ': ' + took + ' after the show opened' : ''}. Check the page for the confirmation number.`, 'ok', false,
 				`RSVP accepted (HTTP ${entry.status}). ` +
@@ -396,7 +812,7 @@
 			return null;
 		}
 		try {
-			const response = await fetch(`/__replay/open-in/${seconds}`, { cache: 'no-store' });
+			const response = await fetch(`/__replay/open-in/${seconds}`, { cache: 'no-store', __snlLabel: 'test control (script)' });
 			const text = await response.text();
 			if (!response.ok) throw new Error(`HTTP ${response.status} ${text.slice(0, 100)}`);
 			log(`TEST: ${text}`);
@@ -459,6 +875,7 @@
 		let deadline = openAt.getTime() + CONFIG.GIVE_UP_AFTER_MIN * 60000;
 		let rapidFrom = openAt.getTime() - CONFIG.RAPID_POLL_LEAD_SECONDS * 1000;
 		log(`open time ${openAt.toString()}${testOpenAt ? ' (TEST)' : ''}; rapid polling from ${new Date(rapidFrom).toLocaleTimeString()}`);
+		reportOpenTime(openAt.getTime());   // the request log is written LOG_AFTER_OPEN_MS after this if the run has not succeeded by then
 
 		// Localhost only: the "Set test open time" button in the settings panel can move the open time while this runs (see the panel). The countdown,
 		// the start of the rapid polling, the watchdog and the give-up time all read these variables, so they follow. If the rapid polling has already
@@ -470,6 +887,7 @@
 			deadline = openAt.getTime() + CONFIG.GIVE_UP_AFTER_MIN * 60000;
 			rapidFrom = openAt.getTime() - CONFIG.RAPID_POLL_LEAD_SECONDS * 1000;
 			log(`open time changed to ${openAt.toString()} (TEST); rapid polling from ${new Date(rapidFrom).toLocaleTimeString()}`);
+			reportOpenTime(openAt.getTime());
 			return true;
 		};
 		if (isLocal) {
@@ -637,7 +1055,7 @@
 			const startedAt = Date.now();
 			const timer = setTimeout(() => controller.abort(), CONFIG.POLL_TIMEOUT_MS);
 			(async () => {
-				const response = await fetch(LIST_API, { headers: { Accept: 'application/json' }, credentials: 'omit', signal: controller.signal });
+				const response = await fetch(LIST_API, { headers: { Accept: 'application/json' }, credentials: 'omit', signal: controller.signal, __snlLabel: 'list poll (script)' });
 				if (!response.ok) throw new Error(`HTTP ${response.status}`);
 				const events = (await response.json()).events || [];   // the same signal also cuts off an answer that never finishes
 				await handleList(events, startedAt, controller);
@@ -1005,6 +1423,8 @@
 				<div class="row"><button class="act primary" id="save" type="button">Save</button><button class="act" id="reload" type="button">Reload page</button><button class="act" id="close" type="button">Close</button></div>
 				<div id="msg"></div>
 				<small>The active profile is used the next time the page loads. After changing it, reload the page.</small>
+				<hr><div class="row"><button class="act" id="dlLog" type="button" title="Writes the request log so far as a file">Download request log</button></div>
+				<small>The request log is saved by itself when the RSVP is accepted, or 2 minutes after the open time.</small>
 				${isLocal ? '<hr><div class="row"><button class="act" id="testOpen" type="button" title="Localhost only: sets when the replay server opens the show">Set test open time...</button></div>' : ''}
 			</div>`;
 		document.body.appendChild(host);
@@ -1052,6 +1472,11 @@
 		$('badge').addEventListener('click', () => { $('panel').hidden = !$('panel').hidden; });
 		$('close').addEventListener('click', () => { $('panel').hidden = true; });
 		$('reload').addEventListener('click', () => location.reload());
+		$('dlLog').addEventListener('click', () => {
+			if (!CONFIG.LOG_ENABLED) return say('The request log is switched off (CONFIG.LOG_ENABLED).', 'err');
+			if (!collector.entries.size) return say('No requests have been recorded yet.', 'err');
+			say(collectorFinalize('downloaded by hand from the settings panel', true) ? `The log so far (${collector.entries.size} entries) was written to your downloads.` : 'The log could not be written.', 'ok');
+		});
 
 		// Localhost only (the button exists only then): ask how many seconds, set that open time on the replay server, and move the countdown.
 		if (isLocal) $('testOpen').addEventListener('click', async () => {
@@ -1138,6 +1563,8 @@
 			: location.pathname === '/' ? 'snlstandby.nbcuni.com'
 			: location.pathname.startsWith('/public/nbc') ? 'pro.vow.app'
 			: location.pathname.startsWith('/event/') ? 'go.vow.app' : '';
+		if (host === 'pro.vow.app' || host === 'go.vow.app') installCapture(host === 'pro.vow.app' ? 'list' : 'registration');   // before the page's own scripts run
+		startLogCollector();   // the top page (or a page on its own) collects the log
 		if (window.top === window) {
 			// The page you look at: it keeps the profiles, answers the copies of the script in its iframe, and shows the settings panel.
 			ensureStore();   // the first time, make a first profile from the built-in test settings
