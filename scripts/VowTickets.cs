@@ -6,7 +6,7 @@
 // documented in docs/VOW_SNL_FLOW.md (read it first; section numbers below refer to it).
 //
 // Run:      dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait]
-//                                               [--title TEXT] [--event UUID] [--group-size N] [--series SLUG]
+//                                               [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--help]
 // --config: REQUIRED. The JSON file with the attendee and show (see UserConfig; example: credentials/dean.json). The .json suffix is
 //           optional, and a bare name is also looked for in the credentials/ folder (git-ignored: these files hold personal data).
 //           --title, --event, --group-size and --series override the file, in any order.
@@ -23,8 +23,12 @@
 //           it SECONDS from now (its test endpoint /__replay/open-in/N; SECONDS may be fractional, 0 = open at once, at most 86400). The server also
 //           gives both shows new random event and journey ids, which this script then reads from the list as usual. The run time becomes that open
 //           time less 1 s (like Thursday 09:59:59 for a 10:00 open) and the run WAITS for it with the usual "Run In:" countdown, unless --nowait.
-// Choosing: --event picks by uuid; --title picks the first upcoming event whose name contains TEXT (any case);
-//           with neither, the first event that is open, has seats and has not passed is used.
+// Choosing: done at the run time from the events list; no uuid is stored anywhere. --event UUID picks by uuid; --title TEXT, or "Show" in the config
+//           file, picks the first upcoming event whose name contains the text (any case). If nothing matches, the first event that is open, has seats
+//           and has not passed is used instead.
+// Early check: while waiting for the run time, the same choice is tested against the events list at the start and then every minute (green: found;
+//           red: no event matches, with the names the list has; yellow: list empty or unreadable). It prints only when the answer changes, so there
+//           is time to fix the config's Show before the opening. It never stops the run.
 // --mode:   what is sent once the event is open (all modes first poll the events list until it is open):
 //           1 (or min, minimal) = just the RSVP. Fastest; plus_ones is not checked against the journey's limit (assumed 1, as seen 2026-09-24 and 2026-10-01).
 //           2 (or partial) = load the journey (load-for-visitor), then the RSVP. (default)
@@ -79,22 +83,58 @@ const int RsvpMaxAttempts = 5;
 const int RsvpRetryDelayMs = 2000;
 const int RsvpMinRateRemaining = 3;
 
+// ---- Time limits for one request. HttpClient's own limit is 100 s, so without these a request that hangs would hold things up for that long. ----
+// A request that hangs is given up on (the answer, if it ever comes, is not wanted any more) and the retry or the next poll goes on.
+const int PollTimeoutMs = 5000;		// the events list: each poll (they overlap, so one that hangs just frees its slot), the first list and the show check (retried). It answers in about 0.1 s; 2.2 s was the worst seen at the 2026-10-01 go-live.
+const int JourneyTimeoutMs = 10000;	// load-for-visitor: slow at the go-live (6.7 s seen 2026-10-01), so it is not cut off early.
+const int JourneyBudgetSeconds = 30;	// retries of the journey load stop once this much time has passed since the first try (RetryBudgetSeconds is for the events list)
+const int OptionalTimeoutMs = 10000;	// the browser-mimicking calls (registration page, auth check, log-interaction): the RSVP does not depend on them
+// The RSVP has NO limit of its own on purpose (it keeps HttpClient's 100 s): it is the one call that must not be cut off, because the server may be
+// about to accept it. What happens after a failed RSVP is described in Step8_SubmitRsvp.
+
+// While waiting for the run time, the show name from the config (or --title / --event) is checked against the events list once at the start and then
+// every this many seconds, so a wrong or renamed show is found with time to fix it, not at 09:59:59 when the selection is made.
+const int ShowCheckEverySeconds = 60;
+
 var context = new Context();
 var runConfig = new RunConfig();
 Func<VowEvent, bool> available = e => e.IsOpen && e.SlotsAvailable > 0 && !e.HasPassed;
 Func<VowEvent, bool> selector = available;
 DateTime runTime = DateTime.Now;
+string selectorText = "";	// what the selector looks for, in words: the config's Show, or --title / --event
+string lastShowCheck = "";	// the text of the last show check that was printed; a check prints only when its result changes
 DateTime scriptStart = DateTime.Now;
 
-const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--replay-server PORT|URL] [--open-show-in SECONDS]";
+const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--replay-server PORT|URL] [--open-show-in SECONDS] [--help]   (--help describes each option)";
+
+// --help: every option, one per line, in alphabetical order
+string[] helpLines = {
+	"VowTickets: registers for SNL Standby tickets on vow.app. Usage: dotnet run scripts/VowTickets.cs -- --config FILE [options]",
+	"",
+	"  --config FILE             REQUIRED. JSON file with the attendee and show (the .json suffix is optional; a bare name is also looked for in credentials/).",
+	"  --event UUID              Use the event with this uuid. Overrides the config's Show.",
+	"  --group-size N            Total people including you. Overrides the config.",
+	"  --help                    Show this list and exit.",
+	"  --list                    Print every event (uuid, start, status, seats, name) and stop. Skips the wait for the run time.",
+	"  --mode MODE               What is sent once the event is open: min (or 1) = just the RSVP; partial (or 2) = load the journey, then the RSVP (the default); full (or 3) = copy the browser.",
+	"  --nowait                  Do not wait for the run time (Thursday 09:59:59 for SNL configs); start right away.",
+	"  --open-show-in SECONDS    Only with --replay-server: make the replay server's show open SECONDS from now (0 to 86400). The run waits for it.",
+	"  --replay-server PORT|URL  Test against the local replay server instead of vow.app (PORT means http://localhost:PORT). Nothing is sent to the real site.",
+	"  --series SLUG             The vow.app list name (SNL is nbc). Overrides the config.",
+	"  --submit                  Really send the RSVP. Without it the run is a dry run: the RSVP is printed, not sent.",
+	"  --title TEXT              Use the first upcoming event whose name contains TEXT (any case). Overrides the config's Show.",
+};
 string? configArg = null;
 string? seriesOverride = null;
 string? replayServer = null;
 double? openShowIn = null;
 int? groupSizeOverride = null;
 Func<VowEvent, bool>? selectorOverride = null;
+string? selectorOverrideText = null;	// what selectorOverride looks for, in words, for the early show check
 for (int i = 0; i < args.Length; i++) {
 	switch (args[i]) {
+
+		case "--help": foreach (string line in helpLines) Console.WriteLine(line); return 0;
 
 		// attendee + show file (required; applied after all arguments are read, so the overrides below win)
 		case "--config" when i + 1 < args.Length: configArg = args[++i]; break;
@@ -104,11 +144,13 @@ for (int i = 0; i < args.Length; i++) {
 		case "--event" when i + 1 < args.Length: {
 			string eventUuid = args[++i];
 			selectorOverride = e => string.Equals(e.Uuid, eventUuid, StringComparison.OrdinalIgnoreCase);
+			selectorOverrideText = $"--event {eventUuid}";
 			break;
 		}
 		case "--title" when i + 1 < args.Length: {
 			string titleText = args[++i];
 			selectorOverride = e => e.Name.Contains(titleText, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
+			selectorOverrideText = $"--title \"{titleText}\"";
 			break;
 		}
 
@@ -197,6 +239,7 @@ if (config.RunAt == ForSNL)
 if (seriesOverride != null) context.Series = seriesOverride;
 if (groupSizeOverride != null) context.GroupSize = groupSizeOverride.Value;
 if (selectorOverride != null) selector = selectorOverride;
+selectorText = selectorOverrideText ?? $"the config's Show \"{context.Show}\"";
 
 if (context.Series == "") {
 	Console.Error.WriteLine("No series: set \"Series\" in the config file (SNL is \"nbc\") or pass --series SLUG.");
@@ -245,6 +288,10 @@ try {
 	// ---- --open-show-in: set the replay server's open time first, so everything below sees the show as coming soon until then ----
 	if (openShowIn != null)
 		await OpenShowInAsync(openShowIn.Value);
+
+	// ---- early check of the show name (again every ShowCheckEverySeconds during the wait) ----
+	if (runConfig.Wait && !runConfig.ListOnly && runTime > DateTime.Now)
+		await CheckShowNameAsync();
 
 	// ---- wait ----
 	// Inside the try so that stopping here still writes the log (in finally).
@@ -362,7 +409,12 @@ bool WaitUntilRunTime() {
 
 	ctrlCStopsCleanly = true;
 	var redTimeSpan = TimeSpan.FromMinutes(5);
+	var nextShowCheck = now.AddSeconds(ShowCheckEverySeconds);
 	while (now < runTime && !stop.IsCancellationRequested) {
+		if (now >= nextShowCheck && !runConfig.ListOnly) {	// not awaited: the countdown goes on while the list is fetched
+			nextShowCheck = now.AddSeconds(ShowCheckEverySeconds);
+			_ = CheckShowNameAsync();
+		}
 		TimeSpan remaining = runTime - now;
 		Console.Write("\rRun In: ");
 		Console.ForegroundColor = remaining < redTimeSpan ? ConsoleColor.Red : ConsoleColor.Green;
@@ -378,6 +430,42 @@ bool WaitUntilRunTime() {
 	return !stop.IsCancellationRequested;
 }
 
+// Fetches the events list and says whether the chosen show (the same selector Step 1 will use) is in it. Prints only when the answer changes, so a
+// check every minute stays quiet. A failure to check is reported but never stops the run: Step 1 asks again at the run time.
+async Task CheckShowNameAsync() {
+	ConsoleColor color;
+	string message;
+	try {
+		List<VowEvent> events = ParseEvents(Require(await SendAsync("0. check the show name", EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs))).Body);
+		string names = string.Join(", ", events.Select(e => $"\"{e.Name}\" ({e.Status})"));
+		List<VowEvent> matches = events.Where(selector).ToList();
+		if (events.Count == 0) {
+			color = ConsoleColor.Yellow;
+			message = "Show check: the events list is empty (the shows are not posted yet). Will check again.";
+		}
+		else if (matches.Count == 0) {
+			color = ConsoleColor.Red;
+			message = $"Show check: NO EVENT MATCHES {selectorText}. The list has: {names}. Fix the config's Show (or --title / --event) before the opening.";
+		}
+		else {
+			color = ConsoleColor.Green;
+			message = $"Show check OK: \"{matches[0].Name}\" ({matches[0].Status}) will be used"
+				+ (matches.Count > 1 ? $"; {matches.Count} events match, the first is taken. The list has: {names}" : ".");
+		}
+	}
+	catch (Exception ex) {
+		color = ConsoleColor.Yellow;
+		message = $"Show check: could not read the events list ({Excerpt(ex.Message, 120)}). Will try again.";
+	}
+	if (message == lastShowCheck) return;
+	lastShowCheck = message;
+	Console.WriteLine();	// the countdown line is rewritten in place; start a line of its own
+	Console.ForegroundColor = color;
+	Console.WriteLine(message);
+	Console.ResetColor();
+	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}");
+}
+
 
 // ================================
 // ======== Required Steps ========
@@ -391,7 +479,7 @@ async Task Step1_GetEventsList(Context context) {
 	// - status is "coming_soon" -> "open" -> "closed" (the front end shows a Register button only for "open")
 	// The browser also sends X-Socket-ID here, but it has no socket yet on the first call ("undefined" was sent and accepted).
 	// Read-only, so it is retried on a 5xx or network failure.
-	string json = await SendWithRetryAsync("1. get events list", EventsListRequest);
+	string json = await SendWithRetryAsync("1. get events list", EventsListRequest, TimeSpan.FromMilliseconds(PollTimeoutMs));
 	context.Events = ParseEvents(json);
 }
 
@@ -428,10 +516,16 @@ async Task Step1b_PollUntilOpen(Context context, int intervalMs = 250, int maxIn
 	WriteWarning($"\"{context.SelectedEvent.Name}\" is {context.SelectedEvent.Status} (no journey id yet). Polling every {intervalMs} ms "
 		+ $"(up to {maxInFlight} at once) for up to {timeLimitMinutes} minutes (Control-C to exit).");
 
+	// Each poll gives up after PollTimeoutMs (so a hung one frees its slot), and all polls still out are called off when this method ends (a winner, an error or Control-C).
+	using var pollStop = new CancellationTokenSource();
+
 	async Task<(int Number, List<VowEvent>? Events)> PollOnceAsync(int number) {
 		try {
-			string json = Require(await SendAsync($"1b. poll {number}", EventsListRequest())).Body;
+			string json = Require(await SendAsync($"1b. poll {number}", EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs), pollStop.Token)).Body;
 			return (number, ParseEvents(json));
+		}
+		catch (OperationCanceledException) when (pollStop.IsCancellationRequested) {
+			return (number, null);	// called off because the polling is over
 		}
 		catch (Exception ex) {
 			Console.WriteLine($"   poll {number} failed ({Excerpt(ex.Message, 200)}); the others continue");
@@ -440,7 +534,7 @@ async Task Step1b_PollUntilOpen(Context context, int intervalMs = 250, int maxIn
 	}
 
 	// Control-C stops the polling with an OperationCanceledException (caught in the main block, which writes the log).
-	// Polls still in flight when this returns are abandoned; they finish on their own and are still logged.
+	// Polls still in flight when this returns are called off (pollStop in the finally below); the call-off is logged as "canceled".
 	ctrlCStopsCleanly = true;
 	var cancelled = Task.Delay(Timeout.Infinite, stop.Token);
 	var inFlight = new List<Task<(int Number, List<VowEvent>? Events)>>();
@@ -483,6 +577,7 @@ async Task Step1b_PollUntilOpen(Context context, int intervalMs = 250, int maxIn
 	}
 	finally {
 		ctrlCStopsCleanly = false;
+		pollStop.Cancel();
 	}
 }
 
@@ -494,7 +589,8 @@ async Task Step4_LoadJourney(Context context) {
 	// Step ids change every week (they belong to the journey), so they are read here and never hard-coded.
 	VowEvent selected = context.SelectedEvent!;
 	string json = await SendWithRetryAsync("4. load journey",
-		() => ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/load-for-visitor", Vow.GoOrigin));
+		() => ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/load-for-visitor", Vow.GoOrigin),
+		TimeSpan.FromMilliseconds(JourneyTimeoutMs), JourneyBudgetSeconds);
 	context.Journey = JsonSerializer.Deserialize<JourneyResponse>(json, JsonOptions)
 		?? throw new InvalidOperationException("Journey response was empty.");
 
@@ -581,7 +677,7 @@ async Task Step2_OpenRegistrationPage(Context context) {
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "cross-site");
 		request.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
-		Require(await SendAsync("2. open registration page", request));
+		Require(await SendAsync("2. open registration page", request, TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
 	});
 }
 
@@ -592,7 +688,7 @@ async Task Step3_CheckAuthUser(Context context) {
 	// event opens (during the polling). Its only side effect is setting the Laravel cookies, which last 15 days. Kept after the opening
 	// for now because that is the browser's order (a server comparing timestamps could notice the difference). Untested either way.
 	await RunOptionalAsync("3. check auth user", async () => {
-		await SendAsync("3. check auth user (401 expected)", ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/auth/user", Vow.GoOrigin));
+		await SendAsync("3. check auth user (401 expected)", ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/auth/user", Vow.GoOrigin), TimeSpan.FromMilliseconds(OptionalTimeoutMs));
 	});
 }
 
@@ -794,15 +890,25 @@ void LogNoResponse(Guid requestId, TimeSpan elapsed, Exception ex) {
 }
 
 // Sends the request, prints one line, and returns the reply. Never throws on a status code (the caller decides).
-async Task<Reply> SendAsync(string label, HttpRequestMessage request) {
+// timeout: give up if there is no complete answer (headers and body) within this time; the failure is a TaskCanceledException with a TimeoutException
+//          inside, which IsRetryable counts as retryable. null = HttpClient's own 100 s.
+// cancel:  lets the caller call the request off (a poll that is no longer needed); that is an OperationCanceledException, not a timeout.
+async Task<Reply> SendAsync(string label, HttpRequestMessage request, TimeSpan? timeout = null, CancellationToken cancel = default) {
 	Guid requestId = Guid.NewGuid();
 	await LogRequestAsync(requestId, label, request);
 	var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 	HttpResponseMessage response;
 	string body;
+	using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+	if (timeout != null) limit.CancelAfter(timeout.Value);
 	try {
-		response = await http.SendAsync(request);
-		body = await response.Content.ReadAsStringAsync();
+		response = await http.SendAsync(request, limit.Token);
+		body = await response.Content.ReadAsStringAsync(limit.Token);
+	}
+	catch (OperationCanceledException) when (timeout != null && limit.IsCancellationRequested && !cancel.IsCancellationRequested) {
+		var timedOut = new TaskCanceledException($"no answer within {timeout.Value.TotalSeconds:0.#} s", new TimeoutException());
+		LogNoResponse(requestId, stopwatch.Elapsed, timedOut);
+		throw timedOut;
 	}
 	catch (Exception ex) {
 		LogNoResponse(requestId, stopwatch.Elapsed, ex);
@@ -829,14 +935,14 @@ Reply Require(Reply reply) {
 // For READ-ONLY steps only: retries after a 5xx or a network error, one at a time (no duplicates in flight), RetryDelayMs apart, for up to
 // RetryBudgetSeconds from the first try. Never use this for the RSVP: it has its own, stricter retry in Step8_SubmitRsvp (rate limit,
 // docs/VOW_SNL_FLOW.md 5.4).
-async Task<string> SendWithRetryAsync(string label, Func<HttpRequestMessage> makeRequest) {
+async Task<string> SendWithRetryAsync(string label, Func<HttpRequestMessage> makeRequest, TimeSpan? timeout = null, int budgetSeconds = RetryBudgetSeconds) {
 	var budget = System.Diagnostics.Stopwatch.StartNew();
 	for (int attempt = 1; ; attempt++) {
 		try {
-			return Require(await SendAsync(label, makeRequest())).Body;
+			return Require(await SendAsync(label, makeRequest(), timeout)).Body;
 		}
-		catch (Exception ex) when (IsRetryable(ex) && budget.Elapsed < TimeSpan.FromSeconds(RetryBudgetSeconds)) {
-			Console.WriteLine($"   attempt {attempt} failed ({ex.Message}); trying again in {RetryDelayMs} ms ({budget.Elapsed.TotalSeconds:0.0} of {RetryBudgetSeconds} s used)");
+		catch (Exception ex) when (IsRetryable(ex) && budget.Elapsed < TimeSpan.FromSeconds(budgetSeconds)) {
+			Console.WriteLine($"   attempt {attempt} failed ({ex.Message}); trying again in {RetryDelayMs} ms ({budget.Elapsed.TotalSeconds:0.0} of {budgetSeconds} s used)");
 			await Task.Delay(RetryDelayMs);
 		}
 	}
@@ -862,7 +968,7 @@ async Task LogInteractionAsync(string label, int stepId, string? actionId) {
 	await RunOptionalAsync(label, async () => {
 		Require(await SendAsync(label, ApiRequest(HttpMethod.Post,
 			$"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/log-interaction", Vow.GoOrigin,
-			json: body, useSocketId: true)));
+			json: body, useSocketId: true), TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
 	});
 }
 
