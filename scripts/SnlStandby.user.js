@@ -8,6 +8,7 @@
 // @match        https://go.vow.app/event/*/journeys/*
 // @match        http://localhost:*/*
 // @run-at       document-start
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=nbc.com
 // @grant        none
 // ==/UserScript==
 
@@ -69,6 +70,7 @@
 		STEP_TIMEOUT_MS: 20000,             // stage 2: how long to wait for each page/step to appear. Starts when the registration page starts (after the
 		                                    // show opened), NOT during the wait for the open. The page's own startup (auth check, then the journey load)
 		                                    // took about 16 s at the 2026-10-01 go-live, so much less than this gives up while it is still loading.
+
 		// stage 2: if the registration page cannot load its journey (the call fails with an HTTP error or a network error, the page says "link is no
 		// longer available", or nothing appears within STEP_TIMEOUT_MS), reload it. RELOAD_ATTEMPTS counts ALL tries, including the first load:
 		// 4 = the first load and up to 3 reloads. RELOAD_WAIT_MS is the wait between a failure and the reload. The count is kept in sessionStorage

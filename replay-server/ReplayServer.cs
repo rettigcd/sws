@@ -460,7 +460,7 @@ app.Run(async http => {
 string startUrl = $"http://localhost:{port}/";
 await app.StartAsync();
 ScheduleFlipLogs();
-ConsoleEx.WriteLine($"Replay server running at {startUrl}");
+ConsoleEx.WriteLine($"Replay server running at {Fg.Cyan}{startUrl}{Fg.Restore}");
 LogShowIds();
 ConsoleEx.WriteLine($"   The show list opens at {Fg.DarkYellow}{OpenAt().ToLocalTime():ddd MMM d HH:mm:ss}{Fg.Restore}. Sets a sooner time with /__replay/open-in/N.");
 if (failures) ConsoleEx.WriteLine($"   Failures Enabled (including: the first {HangPageRequests} registration page requests get no answer)");
