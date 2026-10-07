@@ -44,7 +44,7 @@ def main():
             body = ORIGIN.sub(PLACEHOLDER, body.decode('utf-8')).encode('utf-8')
         cookies = []
         for k, v in hdr:
-            if k.strip().lower() != 'set-cookie' or v.strip().startswith('AWSALB'): continue
+            if k.strip().lower() != 'set-cookie' or v.strip().startswith('AWSALB') or re.match(r'[A-Za-z0-9]{40}=', v.strip()): continue   # random-named Laravel session cookie: piles up in the browser
             parts = [p for p in v.strip().split(';') if not re.match(r'\s*(Domain=|Secure$|SameSite=)', p, re.I)]
             cookies.append(';'.join(parts))
         fn = f'bodies/{sid:03d}.bin'

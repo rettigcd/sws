@@ -337,7 +337,7 @@ app.Run(async http => {
 		if (phase != lastEventsState) { ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path} -> {phase} ({sinceOpen.TotalSeconds:+0.0;-0.0}s from open)"); lastEventsState = phase; }
 		http.Response.ContentType = st.ComingSoon.ContentType;
 		http.Response.Headers["Cache-Control"] = "no-store";
-		foreach (var cookie in st.ComingSoon.Cookies) http.Response.Headers.Append("Set-Cookie", cookie);
+		AppendCookies(http, st.ComingSoon.Cookies);
 		http.Response.ContentLength = body.Length;
 		if (req.Method != "HEAD") await http.Response.Body.WriteAsync(body);
 		return;
@@ -445,7 +445,7 @@ app.Run(async http => {
 	http.Response.StatusCode = resp.Status;
 	if (resp.ContentType != "") http.Response.ContentType = resp.ContentType;
 	http.Response.Headers["Cache-Control"] = "no-store";
-	foreach (var cookie in resp.Cookies) http.Response.Headers.Append("Set-Cookie", cookie);
+	AppendCookies(http, resp.Cookies);
 	byte[] responseBody = resp.Body;
 	if (rsvpOk && method == "GET" && path.EndsWith("/load-for-visitor") && query == "" && resp.Status == 200) {   // --rsvp full keeps the captured (sold out) numbers
 		var journey = (JsonObject)JsonNode.Parse(responseBody)!;
@@ -521,6 +521,13 @@ async Task SendTestConfirmation(string rsvpPath, JsonObject attendee) {
 }
 
 // The calls that were slow in the 2026-10-01 capture (4 to 7 s at 10:00:25 to 10:00:47). Not the RSVP, the show list or the static files.
+// The captured session cookies carry a different random 40-character name on every response (Laravel's hashed session cookie). Replaying them
+// makes the browser pile up a new large localhost cookie per name (15-day lifetime), so those are not replayed.
+static void AppendCookies(HttpContext http, IEnumerable<string> cookies) {
+	foreach (var cookie in cookies)
+		if (!System.Text.RegularExpressions.Regex.IsMatch(cookie, @"^[A-Za-z0-9]{40}=")) http.Response.Headers.Append("Set-Cookie", cookie);
+}
+
 static bool IsSlowUnderLoad(string path) =>
 	path == "/api/auth/user"
 	|| path.StartsWith("/api/v2/media/")
