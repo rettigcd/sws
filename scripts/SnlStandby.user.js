@@ -136,6 +136,8 @@
 	};
 	// Running on the local replay server (replay-server/ReplayServer.cs) instead of the real sites? There every page and the API share one origin.
 	const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+	// The @match line covers every localhost port; only the replay server's port is ours. Other local apps are left alone.
+	if (isLocal && location.port !== '50219') return;
 	// CONFIG.TEST_OPEN_IN_SECONDS, but only on localhost: everything below uses this, never the CONFIG value, so on a real site it is always null.
 	const testOpenInSeconds = isLocal ? CONFIG.TEST_OPEN_IN_SECONDS : null;
 	const LIST_API = isLocal ? '/api/v2/public/by-url/nbc/events' : 'https://api.vow.app/api/v2/public/by-url/nbc/events';   // what the list page polls; CORS allows origin https://pro.vow.app
