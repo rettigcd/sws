@@ -50,10 +50,10 @@ dotnet build
 dotnet run -- <path-to-capture.saz>
 ```
 
-`--out` is optional; if omitted, output defaults to `<path-to-capture>.exchanges.json` next to the input file.
+`--out=FILE` is optional; if omitted, output defaults to `<path-to-capture>.exchanges.json` next to the input file.
 
 ```bash
-dotnet run -- <path-to-capture.saz> --out plan.json
+dotnet run -- <path-to-capture.saz> --out=plan.json
 ```
 
 This produces:
@@ -64,7 +64,7 @@ This produces:
 
 Options:
 
-- `--out <file>`: write JSON to this file instead of the default `<input>.exchanges.json`
+- `--out=FILE`: write JSON to this file instead of the default `<input>.exchanges.json`
 - default output is indented JSON
 - `--compact`: compact JSON output
 - `--trace`: also write `<name>.trace.json` and `<name>.trace.md`. For every form submission found (a POST with name/email/phone fields), lists each value the request needed and which earlier response supplied it (an exchange, a pre-known constant, a browser default, or unknown), following those sources back recursively. See `docs/SNL_TICKET_FLOW_SPEC.md` for a worked example.
@@ -75,7 +75,7 @@ Note: the sources report is always generated.
 
 ```bash
 dotnet run --project app/sws.csproj  -- C:/Users/myusername/Desktop/capture.saz
-dotnet run -- ./capture.saz --out ./capture.exchanges.json
+dotnet run -- ./capture.saz --out=./capture.exchanges.json
 ```
 
 The output is a machine-readable plan you can feed into a later code generator or replay harness.

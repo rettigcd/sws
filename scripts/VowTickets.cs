@@ -5,8 +5,8 @@
 // Everything here is based on the captures saz/snl_sep_24/snl_sep_24_part_1.saz and snl_sep_24_part_2.saz,
 // documented in docs/VOW_SNL_FLOW.md (read it first; section numbers below refer to it).
 //
-// Run:      dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait]
-//                                               [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--help]
+// Run:      dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=1|2|3|min|partial|full] [--submit] [--list] [--nowait]
+//                                               [--title=TEXT] [--event=UUID] [--group-size=N] [--series=SLUG] [--proxy=PORT] [--no-proxy] [--help]
 // --config: REQUIRED. The JSON file with the attendee and show (see UserConfig; example: credentials/dean.json). The .json suffix is
 //           optional, and a bare name is also looked for in the credentials/ folder (git-ignored: these files hold personal data).
 //           --title, --event, --group-size and --series override the file, in any order.
@@ -15,15 +15,19 @@
 // --nowait: skip the wait for the run time (Thursday 09:59:59 for SNL configs) and start right away.
 // Retries: 5xx answers and network errors are retried one try at a time. The first events list and the journey load keep trying every second for
 //           up to 12 s; the RSVP gets up to 5 tries, 2 s apart, and none when the rate limit counter is low (see RsvpMaxAttempts and the constants at the top).
-// --replay-server PORT|URL: test against the local replay server (replay-server/ReplayServer.cs) instead of the real vow.app. PORT is shorthand for
+// --replay-server=PORT|URL: test against the local replay server (replay-server/ReplayServer.cs) instead of the real vow.app. PORT is shorthand for
 //           http://localhost:PORT. The API, the registration page and the listing page are all that one origin. The Pusher connection (mode 3) is
 //           skipped (the replay server has none) and the wait for the run time is skipped (the replay server decides when the show opens; see its
 //           /__replay/open-in/N), except with --open-show-in, which makes the run wait for the open time it sets. Nothing is sent to the real site.
-// --open-show-in SECONDS: only with --replay-server. Before anything else, asks the replay server to put the show list back to coming_soon and open
+// --proxy=PORT: send every request through the HTTP proxy listening on this computer at PORT (http://127.0.0.1:PORT), e.g. Fiddler on 8888.
+//           Even requests to localhost go through it.
+// --no-proxy: do not use a proxy at all: ignore the system-wide proxy setting and connect directly. Cannot be combined with --proxy.
+//           With neither, the system-wide proxy setting is used (HttpClient's default).
+// --open-show-in=SECONDS: only with --replay-server. Before anything else, asks the replay server to put the show list back to coming_soon and open
 //           it SECONDS from now (its test endpoint /__replay/open-in/N; SECONDS may be fractional, 0 = open at once, at most 86400). The server also
 //           gives both shows new random event and journey ids, which this script then reads from the list as usual. The run time becomes that open
 //           time less 1 s (like Thursday 09:59:59 for a 10:00 open) and the run WAITS for it with the usual "Run In:" countdown, unless --nowait.
-// Choosing: done at the run time from the events list; no uuid is stored anywhere. --event UUID picks by uuid; --title TEXT, or "Show" in the config
+// Choosing: done at the run time from the events list; no uuid is stored anywhere. --event=UUID picks by uuid; --title=TEXT, or "Show" in the config
 //           file, picks the first upcoming event whose name contains the text (any case). If nothing matches, the first event that is open, has seats
 //           and has not passed is used instead.
 // Early check: while waiting for the run time, the same choice is tested against the events list at the start and then every minute (green: found;
@@ -106,58 +110,66 @@ string selectorText = "";	// what the selector looks for, in words: the config's
 string lastShowCheck = "";	// the text of the last show check that was printed; a check prints only when its result changes
 DateTime scriptStart = DateTime.Now;
 
-const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config FILE [--mode 1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title TEXT] [--event UUID] [--group-size N] [--series SLUG] [--replay-server PORT|URL] [--open-show-in SECONDS] [--help]   (--help describes each option)";
+const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=1|2|3|min|partial|full] [--submit] [--list] [--nowait] [--title=TEXT] [--event=UUID] [--group-size=N] [--series=SLUG] [--replay-server=PORT|URL] [--open-show-in=SECONDS] [--proxy=PORT] [--no-proxy] [--help]   (--help describes each option)";
 
 // --help: every option, one per line, in alphabetical order
 string[] helpLines = {
-	"VowTickets: registers for SNL Standby tickets on vow.app. Usage: dotnet run scripts/VowTickets.cs -- --config FILE [options]",
+	"VowTickets: registers for SNL Standby tickets on vow.app. Usage: dotnet run scripts/VowTickets.cs -- --config=FILE [options]",
 	"",
-	"  --config FILE             REQUIRED. JSON file with the attendee and show (the .json suffix is optional; a bare name is also looked for in credentials/).",
-	"  --event UUID              Use the event with this uuid. Overrides the config's Show.",
-	"  --group-size N            Total people including you. Overrides the config.",
+	"  --config=FILE             REQUIRED. JSON file with the attendee and show (the .json suffix is optional; a bare name is also looked for in credentials/).",
+	"  --event=UUID              Use the event with this uuid. Overrides the config's Show.",
+	"  --group-size=N            Total people including you. Overrides the config.",
 	"  --help                    Show this list and exit.",
 	"  --list                    Print every event (uuid, start, status, seats, name) and stop. Skips the wait for the run time.",
-	"  --mode MODE               What is sent once the event is open: min (or 1) = just the RSVP; partial (or 2) = load the journey, then the RSVP; full (or 3) = copy the browser (the default).",
+	"  --mode=MODE               What is sent once the event is open: min (or 1) = just the RSVP; partial (or 2) = load the journey, then the RSVP; full (or 3) = copy the browser (the default).",
+	"  --no-proxy                Connect directly: ignore the system-wide proxy setting. Cannot be combined with --proxy.",
 	"  --nowait                  Do not wait for the run time (Thursday 09:59:59 for SNL configs); start right away.",
-	"  --open-show-in SECONDS    Only with --replay-server: make the replay server's show open SECONDS from now (0 to 86400). The run waits for it.",
-	"  --replay-server PORT|URL  Test against the local replay server instead of vow.app (PORT means http://localhost:PORT). Nothing is sent to the real site.",
-	"  --series SLUG             The vow.app list name (SNL is nbc). Overrides the config.",
+	"  --open-show-in=SECONDS    Only with --replay-server: make the replay server's show open SECONDS from now (0 to 86400). The run waits for it.",
+	"  --proxy=PORT              Send every request through the HTTP proxy at http://127.0.0.1:PORT (e.g. Fiddler on 8888), even requests to localhost.",
+	"  --replay-server=PORT|URL  Test against the local replay server instead of vow.app (PORT means http://localhost:PORT). Nothing is sent to the real site.",
+	"  --series=SLUG             The vow.app list name (SNL is nbc). Overrides the config.",
 	"  --submit                  Really send the RSVP. Without it the run is a dry run: the RSVP is printed, not sent.",
-	"  --title TEXT              Use the first upcoming event whose name contains TEXT (any case). Overrides the config's Show.",
+	"  --title=TEXT              Use the first upcoming event whose name contains TEXT (any case). Overrides the config's Show.",
 };
 string? configArg = null;
 string? seriesOverride = null;
 string? replayServer = null;
 double? openShowIn = null;
+int? proxyPort = null;
+bool noProxy = false;
 int? groupSizeOverride = null;
 Func<VowEvent, bool>? selectorOverride = null;
 string? selectorOverrideText = null;	// what selectorOverride looks for, in words, for the early show check
+// Options that take a value are written --name=VALUE (GNU style); flags are written alone. "--name VALUE" is not accepted.
 for (int i = 0; i < args.Length; i++) {
-	switch (args[i]) {
+	string arg = args[i];
+	int eq = arg.StartsWith("--") ? arg.IndexOf('=') : -1;
+	string? value = eq < 0 ? null : arg[(eq + 1)..];
+	switch (eq < 0 ? arg : arg[..eq]) {
 
-		case "--help": foreach (string line in helpLines) Console.WriteLine(line); return 0;
+		case "--help" when value == null: foreach (string line in helpLines) Console.WriteLine(line); return 0;
 
 		// attendee + show file (required; applied after all arguments are read, so the overrides below win)
-		case "--config" when i + 1 < args.Length: configArg = args[++i]; break;
-		case "--series" when i + 1 < args.Length: seriesOverride = args[++i]; break;
+		case "--config" when value != null: configArg = value!; break;
+		case "--series" when value != null: seriesOverride = value!; break;
 
 		// event selection
-		case "--event" when i + 1 < args.Length: {
-			string eventUuid = args[++i];
+		case "--event" when value != null: {
+			string eventUuid = value!;
 			selectorOverride = e => string.Equals(e.Uuid, eventUuid, StringComparison.OrdinalIgnoreCase);
-			selectorOverrideText = $"--event {eventUuid}";
+			selectorOverrideText = $"--event={eventUuid}";
 			break;
 		}
-		case "--title" when i + 1 < args.Length: {
-			string titleText = args[++i];
+		case "--title" when value != null: {
+			string titleText = value!;
 			selectorOverride = e => e.Name.Contains(titleText, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
-			selectorOverrideText = $"--title \"{titleText}\"";
+			selectorOverrideText = $"--title=\"{titleText}\"";
 			break;
 		}
 
 		// config options
-		case "--mode" when i + 1 < args.Length: {
-			int mode = args[++i].ToLowerInvariant() switch {
+		case "--mode" when value != null: {
+			int mode = value!.ToLowerInvariant() switch {
 				"1" or "min" or "minimal" => 1,
 				"2" or "partial" => 2,
 				"3" or "full" => 3,
@@ -171,26 +183,40 @@ for (int i = 0; i < args.Length; i++) {
 			runConfig.Mode = mode;
 			break;
 		}
-		case "--submit": runConfig.Submit = true; break;
-		case "--list": runConfig.ListOnly = true; break;
-		case "--nowait": runConfig.Wait = false; break;
-		case "--replay-server" when i + 1 < args.Length: replayServer = args[++i]; break;
-		case "--open-show-in" when i + 1 < args.Length: {
-			if (!double.TryParse(args[++i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds) || seconds < 0 || seconds > 86400) {
-				Console.Error.WriteLine($"--open-show-in must be a number of seconds from 0 to 86400 (got '{args[i]}').");
+		case "--submit" when value == null: runConfig.Submit = true; break;
+		case "--list" when value == null: runConfig.ListOnly = true; break;
+		case "--nowait" when value == null: runConfig.Wait = false; break;
+		case "--replay-server" when value != null: replayServer = value!; break;
+		case "--open-show-in" when value != null: {
+			if (!double.TryParse(value!, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds) || seconds < 0 || seconds > 86400) {
+				Console.Error.WriteLine($"--open-show-in must be a number of seconds from 0 to 86400 (got '{value}').");
 				return 2;
 			}
 			openShowIn = seconds;
 			break;
 		}
+		case "--proxy" when value != null: {
+			if (!int.TryParse(value!, out int port) || port < 1 || port > 65535) {
+				Console.Error.WriteLine($"--proxy must be a port number from 1 to 65535 (got '{value}').");
+				return 2;
+			}
+			proxyPort = port;
+			break;
+		}
+		case "--no-proxy" when value == null: noProxy = true; break;
 		// user form info
-		case "--group-size" when i + 1 < args.Length: groupSizeOverride = int.Parse(args[++i]); break;
+		case "--group-size" when value != null: groupSizeOverride = int.Parse(value!); break;
 
 		default:
-			Console.Error.WriteLine($"Unknown or incomplete argument: {args[i]}");
+			Console.Error.WriteLine($"Unknown argument, or an option that needs =VALUE (written --name=VALUE), or a flag given a value: {arg}");
 			Console.Error.WriteLine(Usage);
 			return 2;
 	}
+}
+
+if (noProxy && proxyPort != null) {
+	Console.Error.WriteLine("--proxy and --no-proxy cannot be used together.");
+	return 2;
 }
 
 // --open-show-in only makes sense against the replay server: it must never be sent to the real site.
@@ -214,7 +240,7 @@ if (replayServer != null) {
 
 // ---- Load the config file, then apply the command-line overrides. ----
 if (configArg == null) {
-	Console.Error.WriteLine("Missing --config FILE (the JSON file with the attendee and show, e.g. credentials/dean.json).");
+	Console.Error.WriteLine("Missing --config=FILE (the JSON file with the attendee and show, e.g. credentials/dean.json).");
 	Console.Error.WriteLine(Usage);
 	return 2;
 }
@@ -243,7 +269,7 @@ if (selectorOverride != null) selector = selectorOverride;
 selectorText = selectorOverrideText ?? $"the config's Show \"{context.Show}\"";
 
 if (context.Series == "") {
-	Console.Error.WriteLine("No series: set \"Series\" in the config file (SNL is \"nbc\") or pass --series SLUG.");
+	Console.Error.WriteLine("No series: set \"Series\" in the config file (SNL is \"nbc\") or pass --series=SLUG.");
 	Console.Error.WriteLine(Usage);
 	return 2;
 }
@@ -273,6 +299,10 @@ using var handler = new HttpClientHandler {
 	// shares one connection between them), so allow several; one connection would queue them and hide the effect of not waiting.
 	MaxConnectionsPerServer = Vow.IsReplay ? 8 : 1,
 };
+// --proxy=PORT: explicit proxy (BypassOnLocal stays false so localhost, e.g. the replay server, goes through it too). --no-proxy: ignore the system proxy.
+// Neither: HttpClientHandler's default, the system-wide proxy.
+if (proxyPort != null) handler.Proxy = new WebProxy($"http://127.0.0.1:{proxyPort}");
+else if (noProxy) handler.UseProxy = false;
 using var http = new HttpClient(handler);
 context.Http = http;
 

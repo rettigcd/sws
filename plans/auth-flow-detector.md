@@ -186,4 +186,4 @@ Exchanges arrive already ordered by `ExchangeId` ascending (`SazPlanBuilder.Buil
 
 - `dotnet build` after each phase checkpoint (0, 1, 6) to catch compile drift early.
 - `dotnet test` after every phase — full suite must stay green.
-- End-to-end manual check: run `dotnet run -- <existing-sample.saz> --out exchanges.json` (a real capture, e.g. from `saz/` if present) and inspect the generated `.b2c.json` for a sane `AuthFlowDetectionResult` shape (flows, variables, replay requirements, warnings) plus confirm `.exchanges.json`/`.sources.json` are byte-for-byte unchanged in structure (values may still differ if unrelated).
+- End-to-end manual check: run `dotnet run -- <existing-sample.saz> --out=exchanges.json` (a real capture, e.g. from `saz/` if present) and inspect the generated `.b2c.json` for a sane `AuthFlowDetectionResult` shape (flows, variables, replay requirements, warnings) plus confirm `.exchanges.json`/`.sources.json` are byte-for-byte unchanged in structure (values may still differ if unrelated).

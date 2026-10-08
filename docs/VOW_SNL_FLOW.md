@@ -485,7 +485,7 @@ whereas Qudini's `groupSize` is total people. This mapping (`groupSize` = `plus_
 - **Timing matters.** The show was full within minutes (`attending_count` exceeded `capacity` in the capture). Poll the listing just before 10:00 and
   go straight to the RSVP.
 - **Possible early calls.** `GET /api/auth/user` (always 401 for an anonymous visitor, no event in the URL) and the Pusher connection (the socket id
-  comes from Pusher and is not tied to the event) could be sent while polling for the opening, to save time after it. `scripts/VowTickets.cs --mode 3`
+  comes from Pusher and is not tied to the event) could be sent while polling for the opening, to save time after it. `scripts/VowTickets.cs --mode=3`
   still sends them after the opening, in the browser's order. If moved earlier: the Pusher socket closes after 120 s without traffic (5.6), so connect
   less than ~2 minutes before the RSVP or keep it alive with `pusher:ping`. Untested either way.
 - **Rate limit.** The RSVP endpoint reports `x-ratelimit-limit: 10` (Laravel throttle; window and key unknown). Every retry, hedge or duplicate counts against it,
@@ -513,7 +513,7 @@ that thing is checked. Sent from `scripts/VowTickets.cs` (rows A, B) and a scrat
 | Run | What was sent | Result | `x-ratelimit-remaining` after |
 |---|---|---|---|
 | B | `VowTickets.cs` default: events list + `load-for-visitor` + RSVP. Mode 2 (no `--mode`), so no `X-Socket-ID`, no page view, no `log-interaction`. Chrome UA, Origin, Referer. | 422 event full | 9 |
-| A | `VowTickets.cs --mode 3`: adds page view, auth check, Pusher connect (real socket id), 2 `log-interaction` calls. | 422 event full | 8 |
+| A | `VowTickets.cs --mode=3`: adds page view, auth check, Pusher connect (real socket id), 2 `log-interaction` calls. | 422 event full | 8 |
 | C | No cookies at all (no `load-for-visitor`), browser UA, Origin, Referer. | 422 event full | 7 |
 | F | Cookies, made-up `X-Socket-ID: 123456.7890123`. | 422 event full | 6 |
 | E2 | Browser UA only: no cookies, no Origin, no Referer. | 422 event full | 5 |
@@ -533,8 +533,8 @@ Conclusions:
 5. `log-interaction` has a separate, much larger limit: `x-ratelimit-remaining` read 1999/2000 and 1998/2000 on two consecutive calls.
 6. Five of the 10 RSVP requests in this window were spent on the tests. Sending the tests again soon would risk a 429.
 
-Consequences for `scripts/VowTickets.cs`: the User-Agent stays a known constant that must not be dropped; the browser-mimicking steps are only sent in `--mode 3`
-(not proven required, not proven unnecessary); use `--mode 3` when a real registration matters and you want to copy the browser as closely as possible.
+Consequences for `scripts/VowTickets.cs`: the User-Agent stays a known constant that must not be dropped; the browser-mimicking steps are only sent in `--mode=3`
+(not proven required, not proven unnecessary); use `--mode=3` when a real registration matters and you want to copy the browser as closely as possible.
 
 ## 8. Data limitations
 
@@ -661,4 +661,4 @@ under a minute.
 - Start polling a few seconds before 10:00. The show was already open at 10:00:00.5, so the exact opening time (and any early opening or
   local clock error) was not observed. Not implemented yet: the script starts at 10:00:00.5.
 - Spend as little time as possible between seeing `open` and sending the RSVP: the show was full in about 41 s, and `load-for-visitor` alone
-  took about 7 s. This is why `--mode 1` (RSVP only) exists.
+  took about 7 s. This is why `--mode=1` (RSVP only) exists.

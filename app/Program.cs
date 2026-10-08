@@ -31,16 +31,24 @@ bool trace = false;
 
 for (int i = 1; i < args.Length; i++) {
 	string arg = args[i];
-	if (arg is "--compact") {
-		pretty = false;
-		jsonOptions.Pretty = false;
-	}
-	else if (arg is "--out") {
-		if (i + 1 >= args.Length) {
-			Console.Error.WriteLine("Missing value for --out");
+	// Options that take a value are written --name=VALUE (GNU style); flags are written alone.
+	int eq = arg.StartsWith("--") ? arg.IndexOf('=') : -1;
+	string? value = eq < 0 ? null : arg[(eq + 1)..];
+	if (eq >= 0) arg = arg[..eq];
+	if (arg is "--out") {
+		if (value is null or "") {
+			Console.Error.WriteLine("--out needs a value, written --out=FILE");
 			return 2;
 		}
-		outputPath = args[++i];
+		outputPath = value;
+	}
+	else if (value != null) {
+		Console.Error.WriteLine($"Unknown argument, or a flag given a value: {args[i]}");
+		return 2;
+	}
+	else if (arg is "--compact") {
+		pretty = false;
+		jsonOptions.Pretty = false;
 	}
 	else if (arg is "--include-connect") {
 		filterOptions.IncludeConnect = true;
@@ -91,7 +99,7 @@ catch (Exception ex) {
 
 static void PrintUsage() {
 	Console.WriteLine("Usage:");
-	Console.WriteLine("  sws <input.saz> [--out plan.json] [--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps] [--trace]");
+	Console.WriteLine("  sws <input.saz> [--out=plan.json] [--compact] [--include-connect] [--include-css] [--include-media] [--include-metadata] [--include-sourcemaps] [--trace]");
 }
 
 static string ResolveOutputPath(string inputPath, string? outputPath) {
