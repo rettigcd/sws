@@ -697,7 +697,8 @@
 			if (isRsvp) {
 				try {
 					const body = await response.clone().text();
-					recordRsvp({ time: new Date().toISOString(), url, status: response.status, requestBody: init && init.body, responseBody: body.slice(0, 5000) });
+					recordRsvp({ time: new Date().toISOString(), url, status: response.status, requestBody: init && init.body, responseBody: body.slice(0, 5000),
+						sequenceNumbers: sequenceNumbers(body) });
 				} catch (e) { log('could not record RSVP response', e); }
 			}
 			return response;
@@ -742,6 +743,17 @@
 		return ms < 0 ? '-' + text : text;
 	}
 
+	/** The place(s) in line from a successful RSVP body: {"attendees":{"created":[{"registration_sequence_number":37,"is_primary":true,...},
+	 *  {"registration_sequence_number":38,...guest}]}} (2026-10-08). One number per person, the registrant first. [] if none are found.
+	 *  Read from the whole body (the recorded copy is cut at 5000 characters, which a group can exceed). */
+	function sequenceNumbers(body) {
+		try {
+			const created = (JSON.parse(body).attendees || {}).created || [];
+			return created.slice().sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+				.map((a) => a.registration_sequence_number).filter((n) => Number.isInteger(n));
+		} catch (e) { return []; }
+	}
+
 	function recordRsvp(entry) {
 		rsvpAnswered = true;
 		clearInterval(rsvpWatch);
@@ -752,10 +764,17 @@
 		if (entry.status >= 200 && entry.status < 300) {
 			signalLogDone('RSVP accepted');   // the request log is written once the calls that follow have been answered
 			const took = entry.msAfterOpen !== undefined ? formatDuration(entry.msAfterOpen) : null;
-			banner(`RSVP accepted (HTTP ${entry.status})${took ? ': ' + took + ' after the show opened' : ''}. Check the page for the confirmation number.`, 'ok', false,
+			const places = entry.sequenceNumbers || [];
+			const placesLabel = places.length > 1 ? 'Registration sequence numbers' : 'Registration sequence number';
+			banner(`RSVP accepted (HTTP ${entry.status})${took ? ': ' + took + ' after the show opened' : ''}. ` +
+				(places.length ? `${placesLabel}: ${places.join(', ')}. ` : '') + 'Check the page for the confirmation number.', 'ok', false,
 				`RSVP accepted (HTTP ${entry.status}). ` +
 				(took ? `<span style="font:700 22px/1.2 Consolas,monospace;background:rgba(0,0,0,.3);border-radius:4px;padding:1px 8px">${esc(took)}</span> after the show opened. ` : '') +
-				'Check the page for the confirmation number.');
+				'Check the page for the confirmation number.' +
+				// the place in line, on its own line in a colour used nowhere else in the banner (cyan on the green box)
+				(places.length ? `<div style="margin-top:4px">${esc(placesLabel)}: ` +
+					places.map((n) => `<span style="font:700 22px/1.2 Consolas,monospace;background:#80deea;color:#00363a;border-radius:4px;padding:1px 8px;margin-right:4px">${esc(n)}</span>`).join('') +
+					'</div>' : ''));
 		}
 		else if (entry.status === 422 && /capacity_full/.test(entry.responseBody)) banner('The event is FULL (HTTP 422).', 'error');
 		else if (entry.status === 429) banner('Rate limited (HTTP 429). Do not keep clicking; wait.' + noResendNote(), 'error');

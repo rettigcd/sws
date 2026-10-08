@@ -16,7 +16,7 @@
 // Retries: 5xx answers and network errors are retried one try at a time. The first events list and the journey load keep trying every second for
 //           up to 12 s; the RSVP gets up to 5 tries, 2 s apart, and none when the rate limit counter is low (see RsvpMaxAttempts and the constants at the top).
 // --replay-server=PORT|URL: test against the local replay server (replay-server/ReplayServer.cs) instead of the real vow.app. PORT is shorthand for
-//           http://localhost:PORT. The API, the registration page and the listing page are all that one origin. The Pusher connection (mode 3) is
+//           http://localhost:PORT. The API, the registration page and the listing page are all that one origin. The Pusher connection (modes 2 and 3) is
 //           skipped (the replay server has none) and the wait for the run time is skipped (the replay server decides when the show opens; see its
 //           /__replay/open-in/N), except with --open-show-in, which makes the run wait for the open time it sets. Nothing is sent to the real site.
 // --proxy=PORT: send every request through the HTTP proxy listening on this computer at PORT (http://127.0.0.1:PORT), e.g. Fiddler on 8888.
@@ -35,10 +35,13 @@
 //           is time to fix the config's Show before the opening. It never stops the run.
 // --mode:   what is sent once the event is open (all modes first poll the events list until it is open):
 //           1 (or min, minimal) = just the RSVP. Fastest; plus_ones is not checked against the journey's limit (assumed 1, as seen 2026-09-24 and 2026-10-01).
-//           2 (or partial) = load the journey (load-for-visitor), then the RSVP.
+//           2 (or partial) = load the journey (load-for-visitor) and, at the same time, the Pusher WebSocket (for X-Socket-ID), then the RSVP, then step 9 (the journey reloaded for the new attendee and
+//               the log-interaction report of the "YES" action that appears to trigger the confirmation email; see mode 3).
 //           3 (or full) = (default) copy the browser: page view (not waited for), auth check, load the journey, Pusher WebSocket (for X-Socket-ID),
 //               log-interaction for the landing page and the Continue click (sent WITHOUT waiting for the answers, like the page: it does
-//               not await them either), the RSVP, then log-interaction for the result (also not waited for; the log is completed at the end).
+//               not await them either), the RSVP, then the journey reloaded for the new attendee and log-interaction for the result with the
+//               attendee id and the "YES" action (not waited for; the log is completed at the end). That last report appears to be what
+//               makes the server send the confirmation email (2026-10-08: without it, no email; sent by hand later, the email came).
 //           Whether modes 1 and 2 are enough is untested against an event that has room (see below).
 //           Mode 3 sends every call after the event opens, in the browser's order. The auth check and the Pusher connection do not
 //           depend on the event, so they COULD be sent during the polling to save time at the opening; see steps 3 and 5.
@@ -50,11 +53,11 @@
 //   and no Origin/Referer. So none of those is checked BEFORE the capacity check. This does not show they are unchecked for an event with room.
 //   A browser User-Agent IS required: Cloudflare answers any request with a script's default User-Agent with 403 "Error 1010" (all api.vow.app endpoints).
 //
-// !!! The success response of the RSVP call was never captured (both shows were full). Step 8 treats any 2xx as success and prints the
-// !!! body. Everything about the success path is inferred from the site's JavaScript. Verify against a capture of an open show.
+// The success path was first captured on 2026-10-08 (saz/vow/snl_oct_10/snl_10_08.saz, a browser registration that got the email).
+// Step 8 treats any 2xx as success, prints the body and reads the attendee id from it; step 9 follows that capture.
 
 // ==== TODO ====
-// Confirm the RSVP success response shape, and then read the booking/confirmation number from it.
+// Find out whether step 9a (load-for-visitor?attendee=) is needed for the confirmation email, or only 9b (log-interaction with the attendee id).
 // Confirm whether X-Socket-ID / Pusher / log-interaction / cookies / Origin are required once an event has room (untested; all skipped below mode 3 or not enforced when full).
 // Find the rate-limit window (x-ratelimit-limit is 10 per window; see docs/VOW_SNL_FLOW.md 5.4).
 
@@ -121,7 +124,7 @@ string[] helpLines = {
 	"  --group-size=N            Total people including you. Overrides the config.",
 	"  --help                    Show this list and exit.",
 	"  --list                    Print every event (uuid, start, status, seats, name) and stop. Skips the wait for the run time.",
-	"  --mode=MODE               What is sent once the event is open: min (or 1) = just the RSVP; partial (or 2) = load the journey, then the RSVP; full (or 3) = copy the browser (the default).",
+	"  --mode=MODE               What is sent once the event is open: min|1 = RSVP; partial|2 = journey, RSVP, then the report that triggers the email; full|3 = copy the browser.",
 	"  --no-proxy                Connect directly: ignore the system-wide proxy setting. Cannot be combined with --proxy.",
 	"  --nowait                  Do not wait for the run time (Thursday 09:59:59 for SNL configs); start right away.",
 	"  --open-show-in=SECONDS    Only with --replay-server: make the replay server's show open SECONDS from now (0 to 86400). The run waits for it.",
@@ -181,6 +184,7 @@ for (int i = 0; i < args.Length; i++) {
 				return 2;
 			}
 			runConfig.Mode = mode;
+			runConfig.ModeGiven = true;
 			break;
 		}
 		case "--submit" when value == null: runConfig.Submit = true; break;
@@ -259,6 +263,7 @@ catch (Exception ex) {
 	return 2;
 }
 Console.WriteLine($"Config file: {Path.GetFullPath(configPath)}");
+Console.WriteLine($"Mode: {runConfig.ModeName} ({runConfig.ModeDescription}){(runConfig.ModeGiven ? "" : " - the default; change it with --mode=min|partial|full")}");
 context.InitializeFrom(config);
 selector = e => e.Name.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
 if (config.RunAt == ForSNL)
@@ -355,7 +360,7 @@ try {
 	Console.Write($"   Selected Event: \"{context.SelectedEvent.Name}\" on {context.SelectedEvent.StartsAt}, status {context.SelectedEvent.Status}, {context.SelectedEvent.SlotsAvailable} seats ");
 	Console.ResetColor();
 	Console.WriteLine($"(uuid {context.SelectedEvent.Uuid} journey {context.SelectedEvent.JourneyId})");
-	Console.WriteLine($"   mode {runConfig.Mode}: {runConfig.Mode switch { 1 => "just the RSVP", 2 => "load the journey, then the RSVP", _ => "copy the browser" }}");
+	Console.WriteLine($"   mode {runConfig.ModeName}: {runConfig.ModeDescription}");
 
 	// 2-3. What the browser does when the registration page opens. (mode 3 only; not proven required)
 	// The page view is HTML from go.vow.app that the API cannot see, so nothing waits for it (it runs alongside the calls below).
@@ -364,9 +369,15 @@ try {
 		await Step3_CheckAuthUser(context);		// possible early call (see the step)
 	}
 
+	// 5 in mode 2: the Pusher connection (for X-Socket-ID on the RSVP and step 9), opened ALONGSIDE the journey load instead of after it,
+	// so it adds little or no time before the RSVP. Never throws (a failure means no X-Socket-ID); at most 5 s (its timeout).
+	Task? pusher = runConfig.Mode == 2 ? Step5_ConnectPusher(context) : null;
+
 	// 4. Load the journey: sets the cookies and gives the step/action ids and the guest limit. (modes 2 and 3; not proven required)
 	if (runConfig.Mode >= 2)
 		await Step4_LoadJourney(context);
+	if (pusher != null)
+		await pusher;
 
 	// 5-7. Pusher connection and the "visitor clicked through the landing page" calls. (mode 3 only; not proven required)
 	if (runConfig.Mode == 3) {
@@ -393,9 +404,11 @@ try {
 	// 8. Register. (required)
 	await Step8_SubmitRsvp(context);
 
-	// 9. Tell the server which step we ended on. (mode 3 only; not proven required)
-	if (runConfig.Mode == 3)
-		background.Add(Step9_LogRsvpResult(context));
+	// 9. What the page does after the RSVP: reload the journey for the new attendee, then report the "YES" action with the attendee id.
+	// (modes 2 and 3; it needs the journey's step and action ids) The report appears to be what makes the server send the confirmation
+	// email (2026-10-08; see the step). It comes after the RSVP, so it costs no time getting the seat.
+	if (runConfig.Mode >= 2)
+		background.Add(Step9_ReportRsvpResult(context));
 
 	return 0;
 }
@@ -679,11 +692,26 @@ async Task Step8_SubmitRsvp(Context context) {
 
 	if (reply.Ok) {
 		Console.ForegroundColor = ConsoleColor.Green;
-		Console.WriteLine("   registered (2xx). Response shape is unconfirmed; body follows:");
+		Console.WriteLine("   registered (2xx). Body follows:");
 		Console.ResetColor();
 		Console.WriteLine($"   {Excerpt(reply.Body, 1000)}");
 		context.RsvpAccepted = true;
 		context.RsvpAcceptedAt = DateTime.Now;
+		// {"attendees":{"created":[{"id":398341,"is_primary":true,...},{guest...}]},...}  (2026-10-08)
+		List<RsvpAttendee>? created = null;
+		try {
+			created = JsonSerializer.Deserialize<RsvpResponse>(reply.Body, JsonOptions)?.Attendees?.Created;
+			context.AttendeeId = (created?.FirstOrDefault(a => a.IsPrimary) ?? created?.FirstOrDefault())?.Id;
+		}
+		catch (JsonException) { }
+		Console.WriteLine($"   attendee id: {context.AttendeeId?.ToString() ?? "(not found in the response)"}");
+		// The place in line, one number per person (registrant first, then plus-ones), on its own line in its own color.
+		var places = (created ?? []).Where(a => a.RegistrationSequenceNumber != null)
+			.OrderByDescending(a => a.IsPrimary).Select(a => a.RegistrationSequenceNumber!.Value).ToList();
+		Console.Write(places.Count > 1 ? "   registration sequence numbers: " : "   registration sequence number: ");
+		Console.ForegroundColor = ConsoleColor.Cyan;
+		Console.WriteLine(places.Count > 0 ? string.Join(", ", places) : "(not found in the response)");
+		Console.ResetColor();
 		return;
 	}
 
@@ -702,7 +730,7 @@ async Task Step8_SubmitRsvp(Context context) {
 // =======================================
 // Calls the browser makes that no captured call is known to depend on. That does NOT mean they are unnecessary: on 2026-09-24 the RSVP gave
 // the same "event is full" answer with or without them, but only a full event was available to test against.
-// Sent only in mode 3; a failure is logged and ignored.
+// Sent only in mode 3, except step 5 (Pusher, for X-Socket-ID) and step 9 (it appears to trigger the confirmation email), which are also sent in mode 2. A failure is logged and ignored.
 
 async Task Step2_OpenRegistrationPage(Context context) {
 	// ---- Step 2: open the registration page (the register_url the Register button links to). ----
@@ -785,16 +813,33 @@ async Task Step7_LogContinueClick(Context context) {
 	await LogInteractionAsync("7. log continue click", rsvp.Id, cont?.Id.ToString());
 }
 
-async Task Step9_LogRsvpResult(Context context) {
-	// ---- Step 9: report the step the visitor ended on. ----
-	// INFERRED (no success was captured): on success the page shows the step reached by the RSVP step's "rsvp_yes" action;
-	// after a full-event 422 the browser logged the closed step (journey.capacity_step_id) with a null action.
+async Task Step9_ReportRsvpResult(Context context) {
+	// ---- Step 9: what the page does after the RSVP answer. ----
+	// After a full-event 422 the browser logged the closed step (journey.capacity_step_id) with a null action (2026-09-24).
+	// After a success (saz/vow/snl_oct_10/snl_10_08.saz, 2026-10-08) it sends, in this order:
+	//   9a. GET load-for-visitor?attendee={id}   (the journey again, now with the new attendee in "attendees")
+	//   9b. log-interaction {"attendee_id":N,"step_id":<rsvp_yes target>,"action_id":<rsvp_yes id, a NUMBER>,"session":...}
+	// 9b MATTERS: on 2026-10-08 the script sent 9b with no attendee_id and a null action_id, and no confirmation email came. Sending 9a and
+	// 9b by hand afterwards (same session and socket id) produced the email. Whether 9a is needed too is not known (both were sent).
 	Journey? journey = context.Journey?.Journey;
 	JourneyStep? rsvp = journey?.Steps.FirstOrDefault(s => s.Type == "rsvp");
 	JourneyAction? yes = journey?.Actions.FirstOrDefault(a => a.From == rsvp?.Id && a.Function == "rsvp_yes");
-	int? endStep = context.RsvpAccepted ? yes?.To : journey?.CapacityStepId;
-	if (endStep == null) return;
-	await LogInteractionAsync("9. log rsvp result", endStep.Value, actionId: null);
+	if (!context.RsvpAccepted) {
+		if (journey != null)
+			await LogInteractionAsync("9. log rsvp result", journey.CapacityStepId, actionId: null);
+		return;
+	}
+	if (yes == null) { WriteWarning("9. log rsvp result: the journey has no rsvp_yes action; not sent (the confirmation email may not be sent)."); return; }
+	if (context.AttendeeId == null) WriteWarning("9. the RSVP response had no attendee id; 9b is sent without it (the confirmation email may not be sent).");
+
+	VowEvent selected = context.SelectedEvent!;
+	if (context.AttendeeId != null)
+		await RunOptionalAsync("9a. load journey for attendee", async () => {
+			Require(await SendAsync("9a. load journey for attendee", ApiRequest(HttpMethod.Get,
+				$"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/load-for-visitor?attendee={context.AttendeeId}", Vow.GoOrigin),
+				TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
+		});
+	await LogInteractionAsync("9b. log rsvp result", yes.To, actionId: yes.Id, attendeeId: context.AttendeeId);
 }
 
 
@@ -1002,11 +1047,12 @@ async Task RunOptionalAsync(string label, Func<Task> action) {
 	}
 }
 
-async Task LogInteractionAsync(string label, int stepId, string? actionId) {
-	// POST /api/v2/events/{uuid}/journeys/{journey_id}/log-interaction  {"step_id":N,"action_id":"N"|null,"session":<ms epoch>}
+async Task LogInteractionAsync(string label, int stepId, object? actionId, int? attendeeId = null) {
+	// POST /api/v2/events/{uuid}/journeys/{journey_id}/log-interaction  {["attendee_id":N,]"step_id":N,"action_id":"N"|N|null,"session":<ms epoch>}
 	// The response is not JSON (HTML content type) and is ignored. `session` is a client-generated millisecond epoch, constant for the visit.
+	// The page sends the Continue action id as a string and the rsvp_yes action id as a number; callers pass whichever the page sends.
 	VowEvent selected = context.SelectedEvent!;
-	string body = JsonSerializer.Serialize(new LogInteractionRequest { StepId = stepId, ActionId = actionId, Session = context.SessionMs }, new JsonSerializerOptions());
+	string body = JsonSerializer.Serialize(new LogInteractionRequest { AttendeeId = attendeeId, StepId = stepId, ActionId = actionId, Session = context.SessionMs }, new JsonSerializerOptions());
 	await RunOptionalAsync(label, async () => {
 		Require(await SendAsync(label, ApiRequest(HttpMethod.Post,
 			$"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/log-interaction", Vow.GoOrigin,
@@ -1086,7 +1132,7 @@ public sealed class Context {
 	// ---- Discovered by step 4 ----
 	public JourneyResponse? Journey { get; set; }
 
-	// ---- Discovered by step 5 (browser-mimicking, mode 3 only) ----
+	// ---- Discovered by step 5 (browser-mimicking, modes 2 and 3) ----
 	public ClientWebSocket? Pusher { get; set; }
 	/// <summary>Pusher socket id, e.g. "1677674.4468990". Null when step 5 was skipped or failed, in which case no X-Socket-ID header is sent.</summary>
 	public string? SocketId { get; set; }
@@ -1098,6 +1144,8 @@ public sealed class Context {
 	// ---- Result of step 8 ----
 	public bool RsvpAccepted { get; set; }
 	public DateTime? RsvpAcceptedAt { get; set; }
+	/// <summary>The registrant's attendee id from the RSVP response (attendees.created, the primary one). Sent in step 9.</summary>
+	public int? AttendeeId { get; set; }
 
 	public void InitializeFrom(UserConfig config) {
 		Console.WriteLine($"Using config:\r\n\tseries: {config.Series},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tgroup size: {config.GroupSize}\r\n");
@@ -1159,6 +1207,9 @@ public sealed class UserConfig {
 public sealed class RunConfig {
 	/// <summary>1 = just the RSVP, 2 = load the journey then the RSVP, 3 = copy the browser. See the header.</summary>
 	public int Mode { get; set; } = 3;
+	public bool ModeGiven { get; set; }		// --mode was on the command line (otherwise Mode is the default)
+	public string ModeName => Mode switch { 1 => "min", 2 => "partial", _ => "full" };
+	public string ModeDescription => Mode switch { 1 => "just the RSVP", 2 => "load the journey, the RSVP, then report it for the confirmation email", _ => "copy the browser" };
 	public bool Submit { get; set; }
 	public bool ListOnly { get; set; }
 	public bool Wait { get; set; } = true;
@@ -1299,12 +1350,38 @@ public sealed class RsvpRequest {
 	public string Email { get; set; } = "";
 }
 
+// ---- Step 8 response (only what is used) ----
+public sealed class RsvpResponse {
+	[JsonPropertyName("attendees")]
+	public RsvpAttendees? Attendees { get; set; }
+}
+
+public sealed class RsvpAttendees {
+	[JsonPropertyName("created")]
+	public List<RsvpAttendee> Created { get; set; } = [];
+}
+
+public sealed class RsvpAttendee {
+	[JsonPropertyName("id")]
+	public int Id { get; set; }
+	/// <summary>True for the registrant; false for a "Guest Of ..." plus-one.</summary>
+	[JsonPropertyName("is_primary")]
+	public bool IsPrimary { get; set; }
+	/// <summary>Place in line: one number per PERSON (a plus-one gets the next number). Repeated unchanged by load-for-visitor?attendee=.</summary>
+	[JsonPropertyName("registration_sequence_number")]
+	public int? RegistrationSequenceNumber { get; set; }
+}
+
 // ---- log-interaction request ----
 public sealed class LogInteractionRequest {
+	/// <summary>Only on the report after a successful RSVP (step 9b); left out otherwise, as the page does.</summary>
+	[JsonPropertyName("attendee_id")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public int? AttendeeId { get; set; }
 	[JsonPropertyName("step_id")]
 	public int StepId { get; set; }
 	[JsonPropertyName("action_id")]
-	public string? ActionId { get; set; }
+	public object? ActionId { get; set; }
 	[JsonPropertyName("session")]
 	public long Session { get; set; }
 }
