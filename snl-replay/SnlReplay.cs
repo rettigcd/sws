@@ -2,13 +2,13 @@
 #:property TargetFramework=net8.0
 #:property PublishAot=false
 #:include ConsoleEx.cs
-// Local replay of the captured SNL Standby / vow.app sign-up pages (saz/vow/snl_oct_01), for testing SnlStandby.user.js
+// Local replay of the captured SNL Standby / vow.app sign-up pages (saz/vow/snl_oct_08), for testing SnlStandby.user.js
 // when the real servers are not available. Spec: docs/capture-specific-spa-replay-spec.md. The .saz is NOT needed at run time:
 // extract_saz_replay.py (in this folder) turned it into replay-data/ (index.json + bodies/).
 //
-// Log:  everything printed is also written to replay_<date>_<time>.log in the current folder (git-ignored; with dotnet run that is the replay-server/ folder), with timestamps, the bodies of
+// Log:  everything printed is also written to replay_<date>_<time>.log in the current folder (git-ignored; with dotnet run that is the snl-replay/ folder), with timestamps, the bodies of
 //       PUT/POST requests, and the Host/Referer of unmatched requests, for later analysis. Search it for "UNMATCHED" and "SYNTHESIZED".
-// Run:  dotnet run replay-server/ReplayServer.cs -- [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures] [--help]
+// Run:  dotnet run snl-replay/SnlReplay.cs -- [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures] [--help]
 //
 // The captured traffic used four hosts. They are all served from this ONE origin, with no path prefixes, because their paths do not collide:
 //   snlstandby.nbcuni.com  /                                   the page with the iframe          -> http://localhost:PORT/
@@ -20,6 +20,10 @@
 // when it is one of the original names (e.g. a hosts-file setup); otherwise every captured host is tried.
 // Event ids (guids) and journey ids are NOT the captured ones: each start makes new random ones for both shows (journey ids 1000 to 4000) and
 // prints them at start-up; see "shows" below.
+// Journey step and action ids are NOT the captured ones either: each show gets its own, made up the first time each captured id is met (steps
+// 20000 to 59999, actions 60000 to 99999; new ones at every start / reset) and put into every text body of the show (JSON and the page's
+// step=N / data-to="N links).
+// A log-interaction whose step_id / action_id the server did not issue for that show is a 400. The confirmation email also needs it to be the rsvp_yes action.
 // Repeated identical requests get their captured responses in order; the last one repeats forever (state resets on restart).
 //
 // EXCEPTION: GET /api/v2/public/by-url/nbc/events (the show list the page and the userscript poll) is NOT replayed from the capture.
@@ -83,7 +87,7 @@ const string SmtpUser = "rettigcd@gmail.com";
 
 // --help: every option, one per line, in alphabetical order
 string[] helpLines = {
-	"Replay server for the SNL Standby / vow.app pages. Usage: ReplayServer [options]",
+	"Replay server for the SNL Standby / vow.app pages. Usage: SnlReplay [options]",
 	"",
 	"  --email          Send a synthesized TEST confirmation email for each registration, when the log-interaction that follows its RSVP arrives",
 	"                   (smtp.gmail.com; the key is read from credentials/replay-smtp.txt or the REPLAY_SMTP_KEY variable). Without it no email is sent.",
@@ -112,7 +116,7 @@ for (int i = 0; i < args.Length; i++) {
 	else if (args[i] == "--no-load") underLoad = false;
 	else if (args[i] == "--failures") failures = true;
 	else if (args[i] == "--rsvp" && i + 1 < args.Length && args[i + 1] is "ok" or "full") rsvpOk = args[++i] == "ok";
-	else { Console.WriteLine("Usage: ReplayServer [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]   (rsvp defaults to ok; no email is sent unless --email; the slow calls are on unless --no-load)");
+	else { Console.WriteLine("Usage: SnlReplay [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]   (rsvp defaults to ok; no email is sent unless --email; the slow calls are on unless --no-load)");
 		Console.WriteLine("Run with --help for a description of each option."); return; }
 }
 if (port == null) {   // no --port: try the default port, and if something else is using it, any free port (picked by the system)
@@ -129,12 +133,12 @@ if (port == null) {   // no --port: try the default port, and if something else 
 	if (port == null) { Console.WriteLine("No free port found."); return; }
 }
 
-// replay-data is in the replay-server folder, next to this file. It is looked for from the current folder and every folder above it (as
-// <folder>/replay-server/replay-data, or <folder>/replay-data), so it is found from the repo root, from replay-server/ or from any folder below the root.
+// replay-data is in the snl-replay folder, next to this file. It is looked for from the current folder and every folder above it (as
+// <folder>/snl-replay/replay-data, or <folder>/replay-data), so it is found from the repo root, from snl-replay/ or from any folder below the root.
 string? dataDir = null;
 for (var dir = new DirectoryInfo(Directory.GetCurrentDirectory()); dir != null && dataDir == null; dir = dir.Parent)
-	dataDir = new[] { Path.Combine(dir.FullName, "replay-server", "replay-data"), Path.Combine(dir.FullName, "replay-data") }.FirstOrDefault(Directory.Exists);
-if (dataDir == null) { Console.WriteLine("replay-data folder not found (it is in the replay-server folder; run from the repo root or from replay-server/)."); return; }
+	dataDir = new[] { Path.Combine(dir.FullName, "snl-replay", "replay-data"), Path.Combine(dir.FullName, "replay-data") }.FirstOrDefault(Directory.Exists);
+if (dataDir == null) { Console.WriteLine("replay-data folder not found (it is in the snl-replay folder; run from the repo root or from snl-replay/)."); return; }
 
 var captured = JsonSerializer.Deserialize<List<Captured>>(File.ReadAllText(Path.Combine(dataDir, "index.json")),
 	new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
@@ -144,14 +148,15 @@ string logPath = Path.Combine(Directory.GetCurrentDirectory(), $"replay_{DateTim
 ConsoleEx.LogPath = logPath;
 ConsoleEx.TimeStamp = true;
 
-// The two shows as captured on 2026-10-01. Every start, and every call of /__replay/open-in/N, gives each show a NEW random event id (guid) and
+// The two shows as captured on 2026-10-08. Every start, and every call of /__replay/open-in/N, gives each show a NEW random event id (guid) and
 // journey id (1000 to 4000), so a script can not rely on ids that are fixed between runs. They are swapped in below, in the request paths and in the text bodies, in exactly
 // these forms: the event guid, journeys/ID (also JSON-escaped journeys\/ID), "journey_id":ID and "journey":{"id":ID. Other numbers that happen
 // to equal a journey id (step and action ids etc.) are not touched.
 var shows = new[] {
-	// start times as in the captured show list ("2026-10-03T20:00:00Z" and "2026-10-03T23:30:00Z"); the Dress Rehearsal's end is as captured in its journey
-	new Show("Dress Rehearsal", "a082cd50-730a-4ad9-a1d8-c2d1ded4d3fe", 1384, new DateTime(2026, 10, 3, 20, 0, 0), new DateTime(2026, 10, 3, 22, 0, 0)),
-	new Show("Live Show", "23b0b0da-4cfe-4054-b211-b22cc2f0e020", 1382, new DateTime(2026, 10, 3, 23, 30, 0), new DateTime(2026, 10, 3, 23, 30, 0) + TimeSpan.FromHours(2)),
+	// start times as in the captured show list ("2026-10-10T20:00:00Z" and "2026-10-10T23:30:00Z"); the Live Show's end is as captured in its journey,
+	// the Dress Rehearsal's (never captured) is the same length after its start
+	new Show("Dress Rehearsal", "a4ca1ec9-c1bc-491e-9aee-9d39b00c17eb", 1404, new DateTime(2026, 10, 10, 20, 0, 0), new DateTime(2026, 10, 10, 20, 29, 0)),
+	new Show("Live Show", "43f0d714-9761-430e-8685-dca1bd0b8490", 1406, new DateTime(2026, 10, 10, 23, 30, 0), new DateTime(2026, 10, 10, 23, 59, 0)),
 };
 string ReplaceIds(string text, Show from, string toEventId, int toJourneyId) =>
 	text.Replace(from.EventId, toEventId)
@@ -163,6 +168,26 @@ string Renumber(string text) {
 	foreach (var show in shows) text = ReplaceIds(text, show, show.NewEventId, show.NewJourneyId);
 	return text;
 }
+// Journey step / action ids as captured on 2026-10-08 (the Live Show's journey; the Dress Rehearsal gets a copy of it).
+int[] CapturedStepIds = { 6280, 6281, 6282, 6283 }, CapturedActionIds = { 4875, 4876, 4877 };
+const int RsvpYesAction = 4876;   // captured id of the rsvp_yes action (the one that leads to the Confirmation step)
+
+// The id this show uses for a captured step / action id; made up the first time it is asked for.
+int Issue(Show show, int capturedId) {
+	lock (show.IssuedIds) {
+		if (show.IssuedIds.TryGetValue(capturedId, out int issued)) return issued;
+		bool isStep = CapturedStepIds.Contains(capturedId);
+		int lo = isStep ? 20000 : 60000;
+		do issued = Random.Shared.Next(lo, lo + 40000); while (show.IssuedIds.ContainsValue(issued));
+		return show.IssuedIds[capturedId] = issued;
+	}
+}
+string ReplaceNumbers(string text, int[] from, Func<int, int> to) {
+	foreach (int id in from) text = System.Text.RegularExpressions.Regex.Replace(text, $@"(?<!\d){id}(?!\d)", _ => to(id).ToString());
+	return text;
+}
+// the captured step / action ids in a text body -> this show's
+string IssueJourneyIds(Show show, string text) => ReplaceNumbers(text, CapturedStepIds.Concat(CapturedActionIds).ToArray(), id => Issue(show, id));
 bool IsText(Captured c) => c.ContentType.StartsWith("text/") || c.ContentType.StartsWith("application/json") || c.ContentType.StartsWith("application/javascript");
 
 string origin = $"http://localhost:{port}";
@@ -172,24 +197,24 @@ foreach (var c in captured) {
 	if (IsText(c)) c.Body = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(c.Body).Replace("__REPLAY_ORIGIN__", origin));
 }
 
-// Only the Dress Rehearsal's registration side was captured (page, load-for-visitor, log-interaction, rsvp). The Live Show gets a copy of all of
-// it, with the Live Show's ids and the text that is specific to the show changed: "Dress Rehearsal" / "DRESS REHEARSAL" become "Live Show" /
-// "LIVE SHOW", and the start time (taken from the captured show list) and the end time (kept the same length after it) move to the Live Show's.
-// Nothing else in the copy is known to differ, so nothing else is changed (the arrival-time options and event code are still the Dress Rehearsal's).
 var dress = shows[0];
 var live = shows[1];
-foreach (var c in captured.Where(c => c.Path.Contains(dress.EventId)).ToList()) {
+// The text that is specific to a show, turned from the captured show's (the Live Show) into `to`'s: "Live Show" / "LIVE SHOW" become "Dress Rehearsal" /
+// "DRESS REHEARSAL", and the start time (taken from the captured show list) and the end time (kept the same length after it) move to the new show's.
+// Nothing else is known to differ, so nothing else is changed (the arrival-time options and event code are still the Live Show's).
+string ShowSpecific(string text, Show from, Show to) => from == to ? text : text
+	.Replace(from.Name, to.Name).Replace(from.Name.ToUpperInvariant(), to.Name.ToUpperInvariant())
+	.Replace($"\"starts_at\":\"{from.Start:yyyy-MM-dd HH:mm:ss}\"", $"\"starts_at\":\"{to.Start:yyyy-MM-dd HH:mm:ss}\"")
+	.Replace($"\"ends_at\":\"{from.End:yyyy-MM-dd HH:mm:ss}\"", $"\"ends_at\":\"{to.End:yyyy-MM-dd HH:mm:ss}\"")
+	.Replace($"\"start_date_formatted\":\"{from.Start:MMMM dd, yyyy}\"", $"\"start_date_formatted\":\"{to.Start:MMMM dd, yyyy}\"")
+	.Replace($"\"start_time_formatted\":\"{from.Start:h:mmtt}\"", $"\"start_time_formatted\":\"{to.Start:h:mmtt}\"");
+
+// Only the Live Show's registration side was captured (page, load-for-visitor, log-interaction, rsvp, and the success templates below). The Dress
+// Rehearsal gets a copy of all of it, with the Dress Rehearsal's ids and its own show-specific text (ShowSpecific).
+foreach (var c in captured.Where(c => c.Path.Contains(live.EventId)).ToList()) {
 	var copy = c.Copy();
-	copy.Path = ReplaceIds(c.Path, dress, live.EventId, live.JourneyId);
-	if (IsText(c)) {
-		string text = ReplaceIds(Encoding.UTF8.GetString(c.Body), dress, live.EventId, live.JourneyId)
-			.Replace("Dress Rehearsal", "Live Show").Replace("DRESS REHEARSAL", "LIVE SHOW")
-			.Replace($"\"starts_at\":\"{dress.Start:yyyy-MM-dd HH:mm:ss}\"", $"\"starts_at\":\"{live.Start:yyyy-MM-dd HH:mm:ss}\"")
-			.Replace($"\"ends_at\":\"{dress.End:yyyy-MM-dd HH:mm:ss}\"", $"\"ends_at\":\"{live.End:yyyy-MM-dd HH:mm:ss}\"")
-			.Replace($"\"start_date_formatted\":\"{dress.Start:MMMM dd, yyyy}\"", $"\"start_date_formatted\":\"{live.Start:MMMM dd, yyyy}\"")
-			.Replace($"\"start_time_formatted\":\"{dress.Start:h:mmtt}\"", $"\"start_time_formatted\":\"{live.Start:h:mmtt}\"");
-		copy.Body = Encoding.UTF8.GetBytes(text);
-	}
+	copy.Path = ReplaceIds(c.Path, live, dress.EventId, dress.JourneyId);
+	if (IsText(c)) copy.Body = Encoding.UTF8.GetBytes(ShowSpecific(ReplaceIds(Encoding.UTF8.GetString(c.Body), live, dress.EventId, dress.JourneyId), live, dress));
 	captured.Add(copy);
 }
 
@@ -199,12 +224,18 @@ Snapshot BuildSnapshot() {
 	lock (buildLock) {
 		foreach (var show in shows) {
 			show.NewEventId = Guid.NewGuid().ToString();
+			show.IssuedIds = new();
 			do show.NewJourneyId = Random.Shared.Next(1000, 4001); while (shows.Any(o => o != show && o.NewJourneyId == show.NewJourneyId));
 		}
 		var copies = captured.Select(c => {
 			var copy = c.Copy();
 			copy.Path = Renumber(c.Path);
-			if (IsText(c)) copy.Body = Encoding.UTF8.GetBytes(Renumber(Encoding.UTF8.GetString(c.Body)));
+			if (IsText(c)) {
+				string text = Encoding.UTF8.GetString(c.Body);
+				var ofShow = shows.FirstOrDefault(sh => c.Path.Contains(sh.EventId));   // the show's own page / journey / RSVP answers (not the JS files)
+				if (ofShow != null) text = IssueJourneyIds(ofShow, text);
+				copy.Body = Encoding.UTF8.GetBytes(Renumber(text));
+			}
 			return copy;
 		}).ToList();
 		var entries = copies.Where(c => c.Role == "").ToList();
@@ -254,10 +285,8 @@ void ApplyBookingClock(JsonObject journey) {
 int pageRequests = 0;   // --failures: registration page requests since the last start or reset
 var registrations = new System.Collections.Concurrent.ConcurrentDictionary<string, Registration>();   // successful RSVPs made here, by the primary attendee's id
 
-// The captured successful RSVP (see the header). Its text has the capture's own event uuid and journey id, which MakeRegistration swaps.
-const string CapturedEventId = "43f0d714-9761-430e-8685-dca1bd0b8490";
-const int CapturedJourneyId = 1406;
-var capturedShow = new Show("2026-10-08 capture", CapturedEventId, CapturedJourneyId, DateTime.MinValue, DateTime.MinValue);
+// The captured successful RSVP (see the header) is the Live Show's. Its text has the captured event uuid and journey id, which MakeRegistration swaps.
+var capturedShow = live;
 string TemplateText(string role) => Encoding.UTF8.GetString(captured.Single(c => c.Role == role).Body);
 
 string RandomText(int length, string alphabet) => new string(Enumerable.Range(0, length).Select(_ => alphabet[Random.Shared.Next(alphabet.Length)]).ToArray());
@@ -279,7 +308,7 @@ string RandomText(int length, string alphabet) => new string(Enumerable.Range(0,
 		text = text.Replace(tplPass, RandomText(20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))   // the pass links contain the pass code,
 			.Replace(tplRef, RandomText(11, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"))                                                  // the QR link the attendee id
 			.Replace($"attendees/{tplId}/", $"attendees/{firstId + index}/");
-		var a = (JsonObject)JsonNode.Parse(ReplaceIds(text, capturedShow, eventId, journeyId))!;
+		var a = (JsonObject)JsonNode.Parse(ShowSpecific(ReplaceIds(text, capturedShow, eventId, journeyId), capturedShow, shows.First(sh => sh.NewEventId == eventId)))!;
 		a["id"] = firstId + index;
 		a["parent_attendee_id"] = firstId;
 		a["registration_sequence_number"] = booking + index;
@@ -305,7 +334,8 @@ string RandomText(int length, string alphabet) => new string(Enumerable.Range(0,
 // The journey as the real server answers load-for-visitor?attendee=ID after the RSVP: the captured one with the new attendees and numbers.
 string RegisteredJourney(Registration reg) {
 	var primary = reg.Attendees[0];
-	string text = ReplaceIds(TemplateText("registered-journey"), capturedShow, reg.EventId, reg.JourneyId)
+	var show = shows.First(sh => sh.NewEventId == reg.EventId);
+	string text = IssueJourneyIds(show, ShowSpecific(ReplaceIds(TemplateText("registered-journey"), capturedShow, reg.EventId, reg.JourneyId), capturedShow, show))
 		.Replace("attendee=398341", $"attendee={primary["id"]}");
 	var journey = (JsonObject)JsonNode.Parse(text)!;
 	journey["me"] = JsonNode.Parse(primary.ToJsonString());
@@ -321,8 +351,8 @@ string RegisteredJourney(Registration reg) {
 		if (step!["content"]?["html"] == null) continue;
 		step["content"]!["html"] = step["content"]!["html"]!.GetValue<string>()
 			.Replace(">YQSIESJLKTI<", $">{Enc(primary["registration_reference"]!.GetValue<string>())}<")
-			.Replace("bold;\">Christopher<", $"bold;\">{Enc(primary["first_name"]!.GetValue<string>())}<")
-			.Replace("bold;\">Rettig<", $"bold;\">{Enc(primary["last_name"]!.GetValue<string>())}<");
+			.Replace("bold;\">Test<", $"bold;\">{Enc(primary["first_name"]!.GetValue<string>())}<")
+			.Replace("bold;\">User<", $"bold;\">{Enc(primary["last_name"]!.GetValue<string>())}<");
 	}
 	return journey.ToJsonString();
 }
@@ -482,6 +512,36 @@ app.Run(async http => {
 		return;
 	}
 
+	// log-interaction: step_id and action_id must be ids this server issued for the show in the path (null action_id is allowed: the closed step
+	// is logged with none). A number or a numeric string is accepted for action_id (the page sends a string, the confirmation call a number).
+	if (method == "POST" && path.StartsWith("/api/v2/events/") && path.EndsWith("/log-interaction")) {
+		var ofShow = shows.FirstOrDefault(sh => sh.NewEventId == path.Split('/')[4]);
+		string? bad = null;
+		try {
+			using var logged = await JsonDocument.ParseAsync(req.Body);
+			req.Body.Position = 0;
+			var root = logged.RootElement;
+			if (ofShow == null) bad = "unknown event";
+			else if (root.ValueKind != JsonValueKind.Object) bad = "the body is not a JSON object";
+			else {
+				long? Number(string name) => root.TryGetProperty(name, out var v) ? v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long n) ? n
+					: v.ValueKind == JsonValueKind.String && long.TryParse(v.GetString(), out long m) ? m : -1 : null;
+				long? stepId = Number("step_id"), actionId = Number("action_id");
+				var steps = CapturedStepIds.Select(id => (long)Issue(ofShow, id));
+				var actions = CapturedActionIds.Select(id => (long)Issue(ofShow, id));
+				if (stepId == null || !steps.Contains(stepId.Value)) bad = $"step_id {(stepId == null ? "missing" : stepId.ToString())} is not a step of this show's journey";
+				else if (actionId != null && !actions.Contains(actionId.Value)) bad = $"action_id {actionId} is not an action of this show's journey";
+			}
+		} catch (JsonException) { bad = "the body is not valid JSON"; }
+		if (bad != null) {
+			ConsoleEx.WriteLine($"{Fg.Blue}POST{Fg.Restore} {path} {Fg.Red}-> 400 ({bad}){Fg.Restore}");
+			http.Response.StatusCode = 400;
+			http.Response.ContentType = "application/json";
+			await http.Response.WriteAsync(new JsonObject { ["error"] = "Bad request: " + bad }.ToJsonString());
+			return;
+		}
+	}
+
 	// The call that makes the real server send the confirmation email: log-interaction with the new attendee's id and an action id (a null action
 	// id, as after a full-event 422, does not). The captured answer to log-interaction is still sent afterwards, by the lookup below.
 	if (rsvpOk && method == "POST" && path.StartsWith("/api/v2/events/") && path.EndsWith("/log-interaction")) {
@@ -492,9 +552,14 @@ app.Run(async http => {
 			if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("attendee_id", out var aid) && aid.ValueKind == JsonValueKind.Number
 					&& registrations.TryGetValue(aid.GetRawText(), out var reg)) {
 				bool hasAction = root.TryGetProperty("action_id", out var act) && act.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
+				var yesShow = shows.First(sh => sh.NewEventId == reg.EventId);
+				if (hasAction && act.ToString() != Issue(yesShow, RsvpYesAction).ToString()) {   // checked above to be an action of the show, but not the one that leads to the Confirmation
+					ConsoleEx.WriteLine($"   log-interaction for attendee {aid} with action_id {act}: not the rsvp_yes action ({Issue(yesShow, RsvpYesAction)}), so it does not trigger the confirmation email");
+					hasAction = false;
+				}
 				bool first;
 				lock (reg) { first = hasAction && !reg.EmailTriggered; if (first) reg.EmailTriggered = true; }
-				if (!hasAction) ConsoleEx.WriteLine($"   log-interaction for attendee {aid} has no action_id: this does not trigger the confirmation email");
+				if (!hasAction) ConsoleEx.WriteLine($"   log-interaction for attendee {aid}: no rsvp_yes action_id, so no confirmation email");
 				else if (!first) ConsoleEx.WriteLine($"   log-interaction for attendee {aid}: the confirmation email was already triggered");
 				else {
 					ConsoleEx.WriteLine($"   {Fg.Green}log-interaction for attendee {aid} with action_id {act}: triggers the confirmation email{Fg.Restore} (load-for-visitor?attendee={aid} {(reg.JourneyLoaded ? "was" : "was NOT")} called first)");
@@ -593,7 +658,7 @@ async Task SendTestConfirmation(Registration reg) {
 		string nl = Environment.NewLine;
 		using var mail = new MailMessage(SmtpUser, to) {
 			Subject = $"[TEST] You're registered: {show}",
-			Body = "*** TEST *** This message comes from the local replay server (ReplayServer.cs). No real registration was made. ***" + nl + nl
+			Body = "*** TEST *** This message comes from the local replay server (SnlReplay.cs). No real registration was made. ***" + nl + nl
 				+ $"Hi {attendee["first_name"]}," + nl + nl + $"You're confirmed for {show}." + nl + nl
 				+ $"Booking number: {reg.Booking} (made up)" + nl + $"Attendee id: {attendee["id"]} (made up)" + nl + nl + "*** TEST *** not a real VOW / NBC confirmation ***",
 		};
@@ -651,6 +716,7 @@ class Show {
 	public int JourneyId { get; }      // as captured
 	public string NewEventId { get; set; } = "";
 	public int NewJourneyId { get; set; }
+	public Dictionary<int, int> IssuedIds { get; set; } = new();   // captured step / action id -> the id made up for this show
 }
 
 class Captured {

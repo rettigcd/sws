@@ -40,7 +40,7 @@ and tested.
 Example final layout:
 
 ``` text
-ReplayServer.cs
+SnlReplay.cs
 replay-data/
     ...
 ```
@@ -469,12 +469,12 @@ The following are explicitly not goals:
 At minimum:
 
 ``` text
-ReplayServer.cs
+SnlReplay.cs
 replay-data/
     ...
 ```
 
-`ReplayServer.cs` contains **all C# source code**.
+`SnlReplay.cs` contains **all C# source code**.
 
 `replay-data` contains whatever extracted or transformed captured
 resources are needed.
@@ -491,13 +491,13 @@ development/preprocessing work is complete.
 Typical final usage:
 
 ``` text
-ReplayServer --open
+SnlReplay --open
 ```
 
 or:
 
 ``` text
-ReplayServer --port 8123 --open
+SnlReplay --port 8123 --open
 ```
 
 The server:

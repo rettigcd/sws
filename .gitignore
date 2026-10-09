@@ -3,6 +3,3 @@ obj/
 bin/
 credentials/
 *.log
-
-# generated from the .saz by replay-server/extract_saz_replay.py
-replay-server/replay-data/

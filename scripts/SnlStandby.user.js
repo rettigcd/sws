@@ -118,7 +118,7 @@
 		PUSH_WAIT_MS: 1000,                 // mode 1: how long to wait for the page's link after pushing the events before redirecting ourselves
 
 		// ---- TESTING (programmers only) ----
-		// Set a number of seconds to make the LOCAL replay server (replay-server/ReplayServer.cs, page on localhost) put the show list back to
+		// Set a number of seconds to make the LOCAL replay server (snl-replay/SnlReplay.cs, page on localhost) put the show list back to
 		// "coming_soon" and open it that many seconds from now (GET /__replay/open-in/N). Each time the list page starts, the open time is
 		// reset like this, so reloading the page re-runs the test without restarting the server. 0 = open right away.
 		// null = do nothing. It is used ONLY when the page is on localhost / 127.0.0.1 (isLocal): anywhere else it is ignored completely (not
@@ -134,7 +134,7 @@
 		dress: { label: 'Dress Rehearsal', re: /dress/i },
 		live: { label: 'Live Show', re: /live/i },
 	};
-	// Running on the local replay server (replay-server/ReplayServer.cs) instead of the real sites? There every page and the API share one origin.
+	// Running on the local replay server (snl-replay/SnlReplay.cs) instead of the real sites? There every page and the API share one origin.
 	const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 	// The @match line covers every localhost port; only the replay server's port is ours. Other local apps are left alone.
 	if (isLocal && location.port !== '50219') return;

@@ -1,0 +1,1 @@
+import{u as r}from"./WMSh78Ts.js";import{aQ as o,aR as a,aS as s,n as u}from"./urfOaDfp.js";const d=o(()=>{const e=a(),{isAuthenticated:n}=r();if(!n.value)return;const t=e.redirect.onGuestOnly;if(t===void 0)throw new Error("`sanctum.redirect.onGuestOnly` is not defined");if(t===!1)throw s({statusCode:403});return u(t,{replace:!0})});export{d as default};

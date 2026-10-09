@@ -1,0 +1,1 @@
+import{a5 as n,h as o,a0 as l}from"./urfOaDfp.js";const r=n({elevation:{type:[Number,String],validator(e){const a=parseInt(e);return!isNaN(a)&&a>=0&&a<=24}}},"elevation");function u(e){return{elevationClasses:o(()=>{const s=l(e)?e.value:e.elevation,t=[];return s==null||t.push(`elevation-${s}`),t})}}export{r as m,u};

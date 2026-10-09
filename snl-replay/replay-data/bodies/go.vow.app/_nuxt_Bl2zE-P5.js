@@ -1,0 +1,1 @@
+import{aP as r,V as u}from"./urfOaDfp.js";const n=r("feature",{state:()=>({feature:null}),actions:{init(e,t){const{$api:a}=u();a.eventFeatures.show(e,t).then(s=>{this.feature=s.data})}}});export{n as u};

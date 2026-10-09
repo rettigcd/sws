@@ -15,7 +15,7 @@
 // --nowait: skip the wait for the run time (Thursday 09:59:59 for SNL configs) and start right away.
 // Retries: 5xx answers and network errors are retried one try at a time. The first events list and the journey load keep trying every second for
 //           up to 12 s; the RSVP gets up to 5 tries, 2 s apart, and none when the rate limit counter is low (see RsvpMaxAttempts and the constants at the top).
-// --replay-server=PORT|URL: test against the local replay server (replay-server/ReplayServer.cs) instead of the real vow.app. PORT is shorthand for
+// --replay-server=PORT|URL: test against the local replay server (snl-replay/SnlReplay.cs) instead of the real vow.app. PORT is shorthand for
 //           http://localhost:PORT. The API, the registration page and the listing page are all that one origin. The Pusher connection (modes 2 and 3) is
 //           skipped (the replay server has none) and the wait for the run time is skipped (the replay server decides when the show opens; see its
 //           /__replay/open-in/N), except with --open-show-in, which makes the run wait for the open time it sets. Nothing is sent to the real site.
@@ -1075,7 +1075,7 @@ public static class Vow {
 	public static string GoOrigin { get; private set; } = "https://go.vow.app";
 	/// <summary>The listing single-page app (iframed by snlstandby.nbcuni.com). Sent as Origin/Referer on the events-list call.</summary>
 	public static string ProOrigin { get; private set; } = "https://pro.vow.app";
-	/// <summary>True after UseReplayServer: the calls go to the local replay server (replay-server/ReplayServer.cs) instead of the real site.</summary>
+	/// <summary>True after UseReplayServer: the calls go to the local replay server (snl-replay/SnlReplay.cs) instead of the real site.</summary>
 	public static bool IsReplay { get; private set; }
 	/// <summary>The replay server serves the API, the registration page and the listing page from one origin.</summary>
 	public static void UseReplayServer(string baseUrl) { ApiBase = GoOrigin = ProOrigin = baseUrl; IsReplay = true; }
