@@ -1,4 +1,4 @@
-"""Dev-time only: turns saz/vow/snl_oct_01/snl_oct_01.saz into replay-data/ (next to this file) for ReplayServer.cs.
+"""Dev-time only: turns saz/vow/snl_oct_01/snl_oct_01.saz (plus the successful RSVP from saz/vow/snl_oct_08/snl_oct_08.saz) into replay-data/ (next to this file) for ReplayServer.cs.
 The server never reads the .saz. Run it from any folder:  python replay-server/extract_saz_replay.py
 Keeps only the four app hosts (snlstandby, pro.vow, go.vow, api.vow), drops CORS preflights (the replay is one origin),
 decodes bodies, points absolute URLs of those hosts at the replay origin (placeholder), and keeps cookies minus AWS load-balancer ones."""
@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 HERE = pathlib.Path(__file__).resolve().parent     # the replay-server folder
 SAZ = HERE.parent / 'saz' / 'vow' / 'snl_oct_01' / 'snl_oct_01.saz'
+SAZ_SUCCESS = HERE.parent / 'saz' / 'vow' / 'snl_oct_08' / 'snl_oct_08.saz'   # the 2026-10-08 capture of a SUCCESSFUL registration (RSVP -> email)
 OUT = HERE / 'replay-data'
 HOSTS = {'snlstandby.nbcuni.com', 'pro.vow.app', 'go.vow.app', 'api.vow.app'}
 TEXT = ('text/', 'application/json', 'application/javascript')
@@ -19,6 +20,14 @@ ORIGIN = re.compile(r'https?:(?:\\?/){2}(?:snlstandby\.nbcuni\.com|pro\.vow\.app
 def split(b):
     i = b.find(b'\r\n\r\n')
     return b[:i].decode('latin1').split('\r\n'), b[i + 4:]
+
+def dechunk(b):
+    out = b''
+    while b:
+        i = b.find(b'\r\n'); n = int(b[:i].split(b';')[0], 16)
+        if n == 0: break
+        out += b[i + 2:i + 2 + n]; b = b[i + 2 + n + 2:]
+    return out
 
 def main():
     z = zipfile.ZipFile(SAZ)
@@ -59,6 +68,28 @@ def main():
     first['role'], last['role'] = 'events-coming-soon', 'events-open'
     for e in polls[1:-1]: (OUT / e['file']).unlink()
     entries = [e for e in entries if e not in polls[1:-1]]
+    # The successful RSVP of the oct_08 capture: the RSVP answer (PUT .../attendees/rsvp) and the journey reloaded for the new attendee
+    # (GET .../load-for-visitor?attendee=N). They are kept as templates (role, not routed): ReplayServer.cs fills in the ids, names and numbers per RSVP.
+    # They keep that capture's own event uuid / journey id; the server swaps them for the ids of the show that was registered for.
+    zs = zipfile.ZipFile(SAZ_SUCCESS)
+    for name in sorted(n for n in zs.namelist() if n.endswith('_c.txt')):
+        sid = int(name[4:7])
+        creq, _ = split(zs.read(name))
+        method, target, _ = creq[0].split(' ', 2)
+        u = urlsplit(target)
+        role = ('rsvp-success' if method == 'PUT' and u.path.endswith('/attendees/rsvp')
+                else 'registered-journey' if method == 'GET' and u.path.endswith('/load-for-visitor') and u.query.startswith('attendee=') else None)
+        if role is None: continue
+        lines, body = split(zs.read(f'raw/{sid:03d}_s.txt'))
+        assert lines[0].split(' ')[1] == '200', (sid, lines[0])
+        if any(l.lower() == 'transfer-encoding: chunked' for l in lines): body = dechunk(body)
+        if any(l.lower() == 'content-encoding: gzip' for l in lines): body = gzip.decompress(body)
+        body = ORIGIN.sub(PLACEHOLDER, body.decode('utf-8')).encode('utf-8')
+        fn = f'bodies/{sid:03d}_success.bin'
+        (OUT / fn).write_bytes(body)
+        entries.append({'id': sid, 'method': method, 'host': u.hostname, 'path': '/__template/' + role, 'query': '',
+                        'status': 200, 'contentType': 'application/json', 'cookies': [], 'file': fn, 'role': role})
+    assert {e.get('role') for e in entries} >= {'rsvp-success', 'registered-journey'}
     (OUT / 'index.json').write_text(json.dumps(entries, indent=1), encoding='utf-8')
     # report: same path+query on two hosts would be ambiguous for the path-only routing
     seen = collections.defaultdict(set)

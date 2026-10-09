@@ -28,15 +28,20 @@
 // response as a template, and after ClosedAfterOpen the same with status "closed" and no register_url (that is how the
 // closed responses in the Oct 1 vow logs look). No seat counts: the real responses have none.
 //
-// SYNTHESIZED (not captured): by default (--rsvp ok), PUT /api/v2/events/{uuid}/attendees/rsvp answers 200 with a made-up success body, as long as
-// the booking number (see below, from the time since the show opened) is 300 or less, and the captured 422 "This event is full." after that.
-// --rsvp full always answers the captured 422. No successful RSVP was ever captured, so the body is the smallest one the
-// registration page's JavaScript (go.vow.app bundle, callAction) accepts: {"attendees":{"created":[<attendee>]}}, where the attendee has only
-// the fields that code reads (id, first_name, last_name, email, is_rsvp, is_attending, parent_attendee_id, user_id). The page then reloads the
-// journey with GET load-for-visitor?attendee=ID (not captured, so also synthesized: the captured load-for-visitor with only "me" and "attendees"
-// changed from null / [] to that attendee) and goes to the Confirmation step.
-// Only with --email: a synthesized TEST confirmation email is sent for each successful RSVP (smtp.gmail.com:587, as SmtpUser) to the email
-// address typed into the form. Without --email (the default) no mail is sent.
+// RSVP (--rsvp ok, the default): PUT /api/v2/events/{uuid}/attendees/rsvp answers 200 with the SUCCESS captured on 2026-10-08
+// (saz/vow/snl_oct_08/snl_oct_08.saz, a browser registration that got the confirmation email), as long as the booking number (see below, from
+// the time since the show opened) is 300 or less; after that it answers the captured 422 "This event is full.". --rsvp full always answers the 422.
+// The captured success is a TEMPLATE (roles rsvp-success and registered-journey in replay-data): per RSVP the server swaps in new attendee ids,
+// the booking number (registration_sequence_number), pass codes, registration reference, the typed name and email, the time, and the event / journey
+// ids of the show registered for. plus_ones = N in the request creates the primary attendee and N "Guest Of <name>" attendees, as the real server did.
+// The page then reloads the journey with GET load-for-visitor?attendee=ID (also the capture: "me" and "attendees" filled in, the Confirmation step
+// showing the registration reference and the typed name) and goes to the Confirmation step.
+// THE EMAIL: the real server sent the confirmation email only after the RSVP AND the calls that follow it (2026-10-08; a script that sent the
+// log-interaction without the attendee id and a null action id got no email): GET load-for-visitor?attendee=ID, then POST log-interaction
+// {"attendee_id":ID,"step_id":..,"action_id":<a number>,"session":..}. Only with --email: a synthesized TEST confirmation email is sent (smtp.gmail.com:587,
+// as SmtpUser) to the address typed into the form when THAT log-interaction arrives (attendee_id of a registration made here, action_id not null),
+// once per registration. Without it nothing is mailed, but the log still says whether the email would have been triggered. Whether the
+// load-for-visitor call is also required is not known (the capture had both), so it is only reported, not required.
 // --failures: the slow calls below (auth/user, load-for-visitor, media, log-interaction) that arrive during the first 5 seconds after the show
 // opened do not succeed after their delay: they wait 3 seconds and answer 500 or 504 (chosen at random for each call). Calls before the open,
 // and calls 5 or more seconds after it, behave as usual (under load: the flat wait, then the captured answer). It works with or without --no-load.
@@ -80,8 +85,8 @@ const string SmtpUser = "rettigcd@gmail.com";
 string[] helpLines = {
 	"Replay server for the SNL Standby / vow.app pages. Usage: ReplayServer [options]",
 	"",
-	"  --email          Send a synthesized TEST confirmation email for each successful RSVP (smtp.gmail.com; the key is read from",
-	"                   credentials/replay-smtp.txt or the REPLAY_SMTP_KEY variable). Without it no email is sent.",
+	"  --email          Send a synthesized TEST confirmation email for each registration, when the log-interaction that follows its RSVP arrives",
+	"                   (smtp.gmail.com; the key is read from credentials/replay-smtp.txt or the REPLAY_SMTP_KEY variable). Without it no email is sent.",
 	"  --failures       Make things fail: in the first 5 s after the show opens, the slow calls (auth/user, load-for-visitor, media,",
 	"                   log-interaction) wait 3 s and answer 500 or 504, and the first 2 requests for the registration page get no answer.",
 	"  --help           Show this list and exit.",
@@ -247,8 +252,80 @@ void ApplyBookingClock(JsonObject journey) {
 	journey["event"]!["next_registration_sequence_number"] = next;
 }
 int pageRequests = 0;   // --failures: registration page requests since the last start or reset
-var bookingNumbers = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();   // attendee id -> booking number
-var attendees = new System.Collections.Concurrent.ConcurrentDictionary<string, JsonObject>();   // synthesized attendees by id
+var registrations = new System.Collections.Concurrent.ConcurrentDictionary<string, Registration>();   // successful RSVPs made here, by the primary attendee's id
+
+// The captured successful RSVP (see the header). Its text has the capture's own event uuid and journey id, which MakeRegistration swaps.
+const string CapturedEventId = "43f0d714-9761-430e-8685-dca1bd0b8490";
+const int CapturedJourneyId = 1406;
+var capturedShow = new Show("2026-10-08 capture", CapturedEventId, CapturedJourneyId, DateTime.MinValue, DateTime.MinValue);
+string TemplateText(string role) => Encoding.UTF8.GetString(captured.Single(c => c.Role == role).Body);
+
+string RandomText(int length, string alphabet) => new string(Enumerable.Range(0, length).Select(_ => alphabet[Random.Shared.Next(alphabet.Length)]).ToArray());
+
+// The RSVP answer for a new registration: a primary attendee and `guests` plus-ones, made from the captured two attendees. Returns the registration
+// (kept for the load-for-visitor and log-interaction calls that follow) and the answer's text.
+(Registration, string) MakeRegistration(string eventId, int journeyId, string first, string last, string email, int guests, int booking) {
+	var reply = (JsonObject)JsonNode.Parse(TemplateText("rsvp-success"))!;
+	var created = reply["attendees"]!["created"]!.AsArray();
+	var tplPrimary = (JsonObject)created[0]!;
+	var tplGuest = (JsonObject)created[1]!;
+	string tplName = tplPrimary["full_name"]!.GetValue<string>();
+	string now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+	int firstId = Interlocked.Add(ref nextAttendeeId, guests + 1) - guests;
+	string fullName = $"{first} {last}";
+	JsonObject Make(JsonObject tpl, int index) {
+		string text = tpl.ToJsonString();
+		string tplId = tpl["id"]!.ToString(), tplPass = tpl["pass_code"]!.GetValue<string>(), tplRef = tpl["registration_reference"]!.GetValue<string>();
+		text = text.Replace(tplPass, RandomText(20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))   // the pass links contain the pass code,
+			.Replace(tplRef, RandomText(11, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"))                                                  // the QR link the attendee id
+			.Replace($"attendees/{tplId}/", $"attendees/{firstId + index}/");
+		var a = (JsonObject)JsonNode.Parse(ReplaceIds(text, capturedShow, eventId, journeyId))!;
+		a["id"] = firstId + index;
+		a["parent_attendee_id"] = firstId;
+		a["registration_sequence_number"] = booking + index;
+		a["registration_journey_id"] = journeyId;
+		a["rsvped_at"] = now; a["created_at"] = now; a["updated_at"] = now;
+		string f = index == 0 ? first : "Guest Of", l = index == 0 ? last : fullName;
+		a["first_name"] = f; a["last_name"] = l; a["full_name"] = $"{f} {l}";
+		var details = a["user_details"]!.AsObject();
+		details["first_name"] = f; details["last_name"] = l; details["full_name"] = $"{f} {l}";
+		if (index == 0) { a["email"] = email; details["email"] = email; }
+		return a;
+	}
+	var family = Enumerable.Range(0, guests + 1).Select(i => Make(i == 0 ? tplPrimary : tplGuest, i)).ToList();
+	created.Clear();
+	foreach (var a in family) created.Add(JsonNode.Parse(a.ToJsonString()));
+	var log = reply["activity_logs"]!["created"]!.AsArray()[0]!.AsObject();
+	log["id"] = firstId;
+	log["reporter"] = log["reporter"]!.GetValue<string>().Replace(tplName, fullName);
+	log["created_at"] = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.000000'Z'");
+	return (new Registration(family, eventId, journeyId, booking), reply.ToJsonString());
+}
+
+// The journey as the real server answers load-for-visitor?attendee=ID after the RSVP: the captured one with the new attendees and numbers.
+string RegisteredJourney(Registration reg) {
+	var primary = reg.Attendees[0];
+	string text = ReplaceIds(TemplateText("registered-journey"), capturedShow, reg.EventId, reg.JourneyId)
+		.Replace("attendee=398341", $"attendee={primary["id"]}");
+	var journey = (JsonObject)JsonNode.Parse(text)!;
+	journey["me"] = JsonNode.Parse(primary.ToJsonString());
+	journey["attendees"] = new JsonArray(reg.Attendees.Select(a => JsonNode.Parse(a.ToJsonString())).ToArray());
+	int taken = reg.Booking - 1 + reg.Attendees.Count;   // seats taken once they are in
+	var inner = journey["journey"]!.AsObject();
+	journey["event"]!["next_registration_sequence_number"] = reg.Booking + reg.Attendees.Count;
+	journey["event"]!["total_attendees"] = journey["event"]!["total_attendees"]!.GetValue<int>() - inner["signup_count"]!.GetValue<int>() + taken;
+	inner["signup_count"] = Math.Min(taken, inner["capacity"]!.GetValue<int>());
+	// The Confirmation step shows the registration reference, first name and last name in bold; the capture has the captured visitor's, so swap those
+	string Enc(string v) => System.Net.WebUtility.HtmlEncode(v);
+	foreach (var step in inner["steps"]!.AsArray()) {
+		if (step!["content"]?["html"] == null) continue;
+		step["content"]!["html"] = step["content"]!["html"]!.GetValue<string>()
+			.Replace(">YQSIESJLKTI<", $">{Enc(primary["registration_reference"]!.GetValue<string>())}<")
+			.Replace("bold;\">Christopher<", $"bold;\">{Enc(primary["first_name"]!.GetValue<string>())}<")
+			.Replace("bold;\">Rettig<", $"bold;\">{Enc(primary["last_name"]!.GetValue<string>())}<");
+	}
+	return journey.ToJsonString();
+}
 
 var builder = WebApplication.CreateBuilder();
 builder.Logging.ClearProviders();
@@ -317,8 +394,7 @@ app.Run(async http => {
 		// a reset starts everything afresh: new random ids for both shows, the repeated-response counters back at the first response,
 		// and the attendees / booking numbers of the previous test forgotten (they belong to the old ids)
 		state = BuildSnapshot();
-		attendees.Clear();
-		bookingNumbers.Clear();
+		registrations.Clear();
 		Interlocked.Exchange(ref pageRequests, 0);   // --failures starts over: the next registration page requests hang again
 		Interlocked.Exchange(ref openAtTicks, (DateTime.UtcNow + TimeSpan.FromSeconds(secs)).Ticks);
 		string newIds = string.Join("; ", shows.Select(sh => $"{sh.Name} event {sh.NewEventId} journey {sh.NewJourneyId}"));
@@ -386,41 +462,47 @@ app.Run(async http => {
 	if (rsvpOk && method == "PUT" && path.StartsWith("/api/v2/events/") && path.EndsWith("/attendees/rsvp") && query == "" && BookingNumberNow() <= MaxBookingNumber) {
 		using var sent = await JsonDocument.ParseAsync(req.Body);
 		string Field(string name) => sent.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
-		var attendee = new JsonObject {
-			["id"] = Interlocked.Increment(ref nextAttendeeId), ["first_name"] = Field("first_name"), ["last_name"] = Field("last_name"), ["email"] = Field("email"),
-			["parent_attendee_id"] = null, ["user_id"] = null, ["is_rsvp"] = true, ["is_attending"] = true,
-		};
-		attendees[attendee["id"]!.ToString()] = attendee;
-		bookingNumbers[attendee["id"]!.ToString()] = BookingNumberNow();
-		var reply = new JsonObject { ["attendees"] = new JsonObject { ["created"] = new JsonArray(attendee) } }.ToJsonString();
-		if (sendEmail) _ = SendTestConfirmation(path, attendee);
-		else ConsoleEx.WriteLine("   no email sent (start the server with --email to send the TEST confirmation)");
-		ConsoleEx.WriteLine($"{Fg.Blue}PUT{Fg.Restore} api.vow.app{path} {Fg.Green}-> 200 SYNTHESIZED success (attendee {attendee["id"]}, {Field("email")}){Fg.Restore}");
+		int guests = sent.RootElement.TryGetProperty("plus_ones", out var po) && po.ValueKind == JsonValueKind.Number && po.TryGetInt32(out int g) ? Math.Clamp(g, 0, 10) : 0;
+		var (reg, reply) = MakeRegistration(path.Split('/')[4], sent.RootElement.GetProperty("journey").GetInt32(), Field("first_name"), Field("last_name"), Field("email"), guests, BookingNumberNow());
+		string primaryId = reg.Attendees[0]["id"]!.ToString();
+		registrations[primaryId] = reg;
+		ConsoleEx.WriteLine($"{Fg.Blue}PUT{Fg.Restore} api.vow.app{path} {Fg.Green}-> 200 captured success (attendee {primaryId} + {guests} guest(s), booking number {reg.Booking}, {Field("email")}){Fg.Restore}");
+		ConsoleEx.WriteLine($"   the email follows the log-interaction with attendee_id {primaryId} and an action_id{(sendEmail ? "" : " (not sent: start the server with --email)")}");
 		http.Response.ContentType = "application/json";
 		await http.Response.WriteAsync(reply);
 		return;
 	}
 
 	if (rsvpOk && method == "GET" && path.EndsWith("/load-for-visitor") && query.StartsWith("attendee=")
-			&& attendees.TryGetValue(query["attendee=".Length..], out var me)) {
-		var journey = (JsonObject)JsonNode.Parse(st.Entries.First(c => c.Path == path && c.Query == "").Body)!;
-		journey["me"] = JsonNode.Parse(me.ToJsonString());
-		journey["attendees"] = new JsonArray(JsonNode.Parse(me.ToJsonString()));
-		// The captured Confirmation page has "-" where the real server puts the booking number, first name and last name (the captured visitor
-		// had none). Fill those three in, in page order.
-		journey["event"]!["next_registration_sequence_number"] = bookingNumbers[me["id"]!.ToString()];
-		foreach (var step in journey["journey"]!["steps"]!.AsArray()) {
-			string html = step!["content"]?["html"]?.GetValue<string>() ?? "";
-			if (!html.Contains("Booking Number")) continue;
-			var values = new Queue<string>(new[] { bookingNumbers[me["id"]!.ToString()].ToString(), me["first_name"]!.GetValue<string>(), me["last_name"]!.GetValue<string>() }
-				.Select(System.Net.WebUtility.HtmlEncode)!);
-			step["content"]!["html"] = System.Text.RegularExpressions.Regex.Replace(html, @"(<span style=""font-weight: bold;"">)-(</span>)",
-				m => values.Count == 0 ? m.Value : m.Groups[1].Value + values.Dequeue() + m.Groups[2].Value);
-		}
-		ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path}?{query} -> 200 SYNTHESIZED (captured journey with me/attendees = attendee {me["id"]})");
+			&& registrations.TryGetValue(query["attendee=".Length..], out var known)) {
+		known.JourneyLoaded = true;
+		ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path}?{query} -> 200 captured journey for the new attendee {known.Attendees[0]["id"]}");
 		http.Response.ContentType = "application/json";
-		await http.Response.WriteAsync(journey.ToJsonString());
+		await http.Response.WriteAsync(RegisteredJourney(known));
 		return;
+	}
+
+	// The call that makes the real server send the confirmation email: log-interaction with the new attendee's id and an action id (a null action
+	// id, as after a full-event 422, does not). The captured answer to log-interaction is still sent afterwards, by the lookup below.
+	if (rsvpOk && method == "POST" && path.StartsWith("/api/v2/events/") && path.EndsWith("/log-interaction")) {
+		try {
+			using var logged = await JsonDocument.ParseAsync(req.Body);
+			req.Body.Position = 0;
+			var root = logged.RootElement;
+			if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("attendee_id", out var aid) && aid.ValueKind == JsonValueKind.Number
+					&& registrations.TryGetValue(aid.GetRawText(), out var reg)) {
+				bool hasAction = root.TryGetProperty("action_id", out var act) && act.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
+				bool first;
+				lock (reg) { first = hasAction && !reg.EmailTriggered; if (first) reg.EmailTriggered = true; }
+				if (!hasAction) ConsoleEx.WriteLine($"   log-interaction for attendee {aid} has no action_id: this does not trigger the confirmation email");
+				else if (!first) ConsoleEx.WriteLine($"   log-interaction for attendee {aid}: the confirmation email was already triggered");
+				else {
+					ConsoleEx.WriteLine($"   {Fg.Green}log-interaction for attendee {aid} with action_id {act}: triggers the confirmation email{Fg.Restore} (load-for-visitor?attendee={aid} {(reg.JourneyLoaded ? "was" : "was NOT")} called first)");
+					if (sendEmail) _ = SendTestConfirmation(reg);
+					else ConsoleEx.WriteLine("   no email sent (start the server with --email to send the TEST confirmation)");
+				}
+			}
+		} catch (JsonException) { /* not JSON: the captured answer below is enough */ }
 	}
 
 	if (rsvpOk && method == "PUT" && path.EndsWith("/attendees/rsvp") && BookingNumberNow() > MaxBookingNumber)
@@ -498,21 +580,22 @@ string? SmtpKey() {
 }
 
 // Fire-and-forget: a mail problem is logged and never changes the RSVP answer.
-async Task SendTestConfirmation(string rsvpPath, JsonObject attendee) {
+async Task SendTestConfirmation(Registration reg) {
+	var attendee = reg.Attendees[0];
 	string to = attendee["email"]!.GetValue<string>();
 	if (to.Equals("test@example.com", StringComparison.OrdinalIgnoreCase)) to = "rettigcd@gmail.com";   // the local userscript's placeholder address goes to the developer instead
 	try {
 		string? key = SmtpKey();
 		if (key == null) { ConsoleEx.WriteLine("   email skipped: no key (credentials/replay-smtp.txt or REPLAY_SMTP_KEY)"); return; }
 		if (!to.Contains('@')) { ConsoleEx.WriteLine($"   email skipped: \"{to}\" is not an email address"); return; }
-		string uuid = rsvpPath.Split('/')[4];
+		string uuid = reg.EventId;
 		string show = JsonNode.Parse(state.OpenTemplate.Body)!["events"]!.AsArray().FirstOrDefault(e => e!["uuid"]!.GetValue<string>() == uuid)?["name"]?.GetValue<string>() ?? "SNL Standby";
 		string nl = Environment.NewLine;
 		using var mail = new MailMessage(SmtpUser, to) {
 			Subject = $"[TEST] You're registered: {show}",
 			Body = "*** TEST *** This message comes from the local replay server (ReplayServer.cs). No real registration was made. ***" + nl + nl
 				+ $"Hi {attendee["first_name"]}," + nl + nl + $"You're confirmed for {show}." + nl + nl
-				+ $"Booking number: {bookingNumbers[attendee["id"]!.ToString()]} (made up)" + nl + $"Attendee id: {attendee["id"]} (made up)" + nl + nl + "*** TEST *** not a real VOW / NBC confirmation ***",
+				+ $"Booking number: {reg.Booking} (made up)" + nl + $"Attendee id: {attendee["id"]} (made up)" + nl + nl + "*** TEST *** not a real VOW / NBC confirmation ***",
 		};
 		using var smtp = new SmtpClient("smtp.gmail.com", 587) { EnableSsl = true, Credentials = new System.Net.NetworkCredential(SmtpUser, key) };
 		await smtp.SendMailAsync(mail);
@@ -546,6 +629,17 @@ class Snapshot {
 	public List<Captured> Entries { get; }     // everything except the two show-list templates
 	public Captured ComingSoon { get; }
 	public Captured OpenTemplate { get; }
+}
+
+// A successful RSVP made here: the primary attendee first, then the plus-ones.
+class Registration {
+	public Registration(List<JsonObject> attendees, string eventId, int journeyId, int booking) { Attendees = attendees; EventId = eventId; JourneyId = journeyId; Booking = booking; }
+	public List<JsonObject> Attendees { get; }
+	public string EventId { get; }
+	public int JourneyId { get; }
+	public int Booking { get; }               // the primary attendee's booking number (registration_sequence_number)
+	public bool JourneyLoaded { get; set; }   // load-for-visitor?attendee=ID has been asked for
+	public bool EmailTriggered { get; set; }  // the log-interaction that triggers the confirmation email has arrived
 }
 
 class Show {
