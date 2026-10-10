@@ -524,7 +524,8 @@ app.Run(async http => {
 			if (ofShow == null) bad = "unknown event";
 			else if (root.ValueKind != JsonValueKind.Object) bad = "the body is not a JSON object";
 			else {
-				long? Number(string name) => root.TryGetProperty(name, out var v) ? v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long n) ? n
+				// null for a missing or JSON null value, -1 for something that is not a number
+				long? Number(string name) => root.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null ? v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long n) ? n
 					: v.ValueKind == JsonValueKind.String && long.TryParse(v.GetString(), out long m) ? m : -1 : null;
 				long? stepId = Number("step_id"), actionId = Number("action_id");
 				var steps = CapturedStepIds.Select(id => (long)Issue(ofShow, id));

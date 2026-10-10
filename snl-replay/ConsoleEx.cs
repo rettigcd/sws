@@ -48,6 +48,8 @@ public readonly record struct RestoreBackground;
 
 public static class Fg
 {
+	public static ForegroundColor For(ConsoleColor color) => new(color);
+
 	public static ForegroundColor Black       => new(ConsoleColor.Black);
 	public static ForegroundColor DarkBlue    => new(ConsoleColor.DarkBlue);
 	public static ForegroundColor DarkGreen   => new(ConsoleColor.DarkGreen);
