@@ -1,7 +1,6 @@
 #:sdk Microsoft.NET.Sdk.Web
-#:property TargetFramework=net8.0
+#:property TargetFramework=net10.0
 #:property PublishAot=false
-#:include ConsoleEx.cs
 // Local replay of the captured SNL Standby / vow.app sign-up pages (saz/vow/snl_oct_08), for testing SnlStandby.user.js
 // when the real servers are not available. Spec: docs/capture-specific-spa-replay-spec.md. The .saz is NOT needed at run time:
 // extract_saz_replay.py (in this folder) turned it into replay-data/ (index.json + bodies/).
@@ -143,10 +142,10 @@ if (dataDir == null) { Console.WriteLine("replay-data folder not found (it is in
 var captured = JsonSerializer.Deserialize<List<Captured>>(File.ReadAllText(Path.Combine(dataDir, "index.json")),
 	new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
 string logPath = Path.Combine(Directory.GetCurrentDirectory(), $"replay_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
-// Everything written through ConsoleEx.WriteLine goes to the console and, with the time in front, to the log file. {Fg.DarkYellow}...{Fg.Restore} in an
-// interpolated string draws just that part in a colour on the console (ConsoleEx.cs); the log file gets the plain text.
-ConsoleEx.LogPath = logPath;
-ConsoleEx.TimeStamp = true;
+// Everything written through Console.WriteLineEx / Console.WriteEx goes to the console and, with the time in front, to the log file. [DarkYellow]...[Restore] in the
+// text draws just that part in a colour on the console (see ConsoleExtensions at the end of this file); the log file gets the plain text.
+Console.LogPath = logPath;
+Console.TimeStamp = true;
 
 // The two shows as captured on 2026-10-08. Every start, and every call of /__replay/open-in/N, gives each show a NEW random event id (guid) and
 // journey id (1000 to 4000), so a script can not rely on ids that are fixed between runs. They are swapped in below, in the request paths and in the text bodies, in exactly
@@ -252,7 +251,7 @@ Snapshot BuildSnapshot() {
 	}
 }
 void LogShowIds() {
-	foreach (var show in shows) ConsoleEx.WriteLine($"   {show.Name + ":",-20} event {show.NewEventId}  journey {show.NewJourneyId}");
+	foreach (var show in shows) Console.WriteLineEx($"   {show.Name + ":",-20} event {show.NewEventId}  journey {show.NewJourneyId}");
 }
 Snapshot state = BuildSnapshot();
 // The default open time: the next 10:00 local time, today's if it is before 10:00 now and tomorrow's otherwise (any day of the week). In practice
@@ -369,7 +368,7 @@ app.Use(async (http, next) => {
 		using var reader = new StreamReader(http.Request.Body, Encoding.UTF8, leaveOpen: true);
 		string text = await reader.ReadToEndAsync();
 		http.Request.Body.Position = 0;
-		ConsoleEx.WriteLine($"{Fg.Blue}{http.Request.Method}{Fg.Restore} {http.Request.Path}{http.Request.QueryString} body: {(text.Length > 2000 ? text[..2000] + "..." : text)}");
+		Console.WriteLineEx($"[Blue]{http.Request.Method}[Restore] {http.Request.Path}{http.Request.QueryString} body: {(text.Length > 2000 ? text[..2000] + "..." : text)}");
 	}
 	await next();
 });
@@ -386,9 +385,9 @@ app.Run(async http => {
 	if (failures && method == "GET" && System.Text.RegularExpressions.Regex.IsMatch(path, @"^/event/[0-9a-f-]{36}/journeys/\d+$")) {
 		int pageTry = Interlocked.Increment(ref pageRequests);
 		if (pageTry <= HangPageRequests) {
-			ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} {path} {Fg.Red}hangs (registration page request {pageTry} of {HangPageRequests}): no answer until the client gives up{Fg.Restore}");
+			Console.WriteLineEx($"[Blue]GET[Restore] {path} [Red]hangs (registration page request {pageTry} of {HangPageRequests}): no answer until the client gives up[Restore]");
 			try { await Task.Delay(Timeout.Infinite, http.RequestAborted); } catch (OperationCanceledException) { /* the client gave up */ }
-			ConsoleEx.WriteLine($"   the client gave up on registration page request {pageTry}");
+			Console.WriteLineEx($"   the client gave up on registration page request {pageTry}");
 			return;
 		}
 	}
@@ -399,7 +398,7 @@ app.Run(async http => {
 		if (failures && sinceOpenNow >= TimeSpan.Zero && sinceOpenNow < FailureWindow) {
 			// --failures: in the first seconds after the show opened these calls fail instead of answering
 			int code = Random.Shared.Next(2) == 0 ? 500 : 504;
-			ConsoleEx.WriteLine($"   failure: {Fg.Blue}{req.Method}{Fg.Restore} {path} arrived {sinceOpenNow.TotalSeconds:0.0} s after the open; waits {FailureDelay.TotalSeconds:0.0} s, then {code}");
+			Console.WriteLineEx($"   failure: [Blue]{req.Method}[Restore] {path} arrived {sinceOpenNow.TotalSeconds:0.0} s after the open; waits {FailureDelay.TotalSeconds:0.0} s, then {code}");
 			try { await Task.Delay(FailureDelay, http.RequestAborted); } catch (OperationCanceledException) { return; }   // the client gave up
 			http.Response.StatusCode = code;
 			http.Response.ContentType = code == 500 ? "application/json" : "text/plain";
@@ -408,7 +407,7 @@ app.Run(async http => {
 		}
 		if (underLoad) {
 			var delay = UnderLoadDelay;
-			ConsoleEx.WriteLine($"{Fg.Blue}{req.Method}{Fg.Restore} {path} {Fg.Cyan} under load of {delay.TotalSeconds:0.0} s{Fg.Restore}");
+			Console.WriteLineEx($"[Blue]{req.Method}[Restore] {path} [Cyan] under load of {delay.TotalSeconds:0.0} s[Restore]");
 			try { await Task.Delay(delay, http.RequestAborted); } catch (OperationCanceledException) { return; }   // the client gave up
 		}
 	}
@@ -430,7 +429,7 @@ app.Run(async http => {
 		string newIds = string.Join("; ", shows.Select(sh => $"{sh.Name} event {sh.NewEventId} journey {sh.NewJourneyId}"));
 		string opensAt = OpenAt().ToLocalTime().ToString("HH:mm:ss.fff");
 		string msg = $"show list is coming_soon now; opens in {secs} s at {opensAt}; closes {ClosedAfterOpen.TotalMinutes} min after that. New ids: {newIds}";   // the answer to the caller
-		ConsoleEx.WriteLine($"TEST CONTROL: show list is coming_soon now; opens in {secs} s at {Fg.DarkYellow}{opensAt}{Fg.Restore}; closes {ClosedAfterOpen.TotalMinutes} min after that. New ids: {newIds}");
+		Console.WriteLineEx($"TEST CONTROL: show list is coming_soon now; opens in {secs} s at [DarkYellow]{opensAt}[Restore]; closes {ClosedAfterOpen.TotalMinutes} min after that. New ids: {newIds}");
 		ScheduleFlipLogs();
 		http.Response.ContentType = "text/plain";
 		await http.Response.WriteAsync(msg);
@@ -440,7 +439,7 @@ app.Run(async http => {
 	if (method == "GET" && path == EventsPath && query == "") {
 		var sinceOpen = DateTime.UtcNow - OpenAt();
 		var (body, phase) = EventsAnswer(sinceOpen, st);
-		if (phase != lastEventsState) { ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path} -> {phase} ({sinceOpen.TotalSeconds:+0.0;-0.0}s from open)"); lastEventsState = phase; }
+		if (phase != lastEventsState) { Console.WriteLineEx($"[Blue]GET[Restore] api.vow.app{path} -> {phase} ({sinceOpen.TotalSeconds:+0.0;-0.0}s from open)"); lastEventsState = phase; }
 		http.Response.ContentType = st.ComingSoon.ContentType;
 		http.Response.Headers["Cache-Control"] = "no-store";
 		AppendCookies(http, st.ComingSoon.Cookies);
@@ -481,7 +480,7 @@ app.Run(async http => {
 			}
 		} catch (JsonException) { problem = "the body is not valid JSON"; }
 		if (problem != null) {
-			ConsoleEx.WriteLine($"{Fg.Blue}PUT{Fg.Restore} api.vow.app{path} -> 400 ({problem})");
+			Console.WriteLineEx($"[Blue]PUT[Restore] api.vow.app{path} -> 400 ({problem})");
 			http.Response.StatusCode = 400;
 			http.Response.ContentType = "application/json";
 			await http.Response.WriteAsync(new JsonObject { ["error"] = "Bad request: " + problem }.ToJsonString());
@@ -496,8 +495,8 @@ app.Run(async http => {
 		var (reg, reply) = MakeRegistration(path.Split('/')[4], sent.RootElement.GetProperty("journey").GetInt32(), Field("first_name"), Field("last_name"), Field("email"), guests, BookingNumberNow());
 		string primaryId = reg.Attendees[0]["id"]!.ToString();
 		registrations[primaryId] = reg;
-		ConsoleEx.WriteLine($"{Fg.Blue}PUT{Fg.Restore} api.vow.app{path} {Fg.Green}-> 200 captured success (attendee {primaryId} + {guests} guest(s), booking number {reg.Booking}, {Field("email")}){Fg.Restore}");
-		ConsoleEx.WriteLine($"   the email follows the log-interaction with attendee_id {primaryId} and an action_id{(sendEmail ? "" : " (not sent: start the server with --email)")}");
+		Console.WriteLineEx($"[Blue]PUT[Restore] api.vow.app{path} [Green]-> 200 captured success (attendee {primaryId} + {guests} guest(s), booking number {reg.Booking}, {Field("email")})[Restore]");
+		Console.WriteLineEx($"   the email follows the log-interaction with attendee_id {primaryId} and an action_id{(sendEmail ? "" : " (not sent: start the server with --email)")}");
 		http.Response.ContentType = "application/json";
 		await http.Response.WriteAsync(reply);
 		return;
@@ -506,7 +505,7 @@ app.Run(async http => {
 	if (rsvpOk && method == "GET" && path.EndsWith("/load-for-visitor") && query.StartsWith("attendee=")
 			&& registrations.TryGetValue(query["attendee=".Length..], out var known)) {
 		known.JourneyLoaded = true;
-		ConsoleEx.WriteLine($"{Fg.Blue}GET{Fg.Restore} api.vow.app{path}?{query} -> 200 captured journey for the new attendee {known.Attendees[0]["id"]}");
+		Console.WriteLineEx($"[Blue]GET[Restore] api.vow.app{path}?{query} -> 200 captured journey for the new attendee {known.Attendees[0]["id"]}");
 		http.Response.ContentType = "application/json";
 		await http.Response.WriteAsync(RegisteredJourney(known));
 		return;
@@ -535,7 +534,7 @@ app.Run(async http => {
 			}
 		} catch (JsonException) { bad = "the body is not valid JSON"; }
 		if (bad != null) {
-			ConsoleEx.WriteLine($"{Fg.Blue}POST{Fg.Restore} {path} {Fg.Red}-> 400 ({bad}){Fg.Restore}");
+			Console.WriteLineEx($"[Blue]POST[Restore] {path} [Red]-> 400 ({bad})[Restore]");
 			http.Response.StatusCode = 400;
 			http.Response.ContentType = "application/json";
 			await http.Response.WriteAsync(new JsonObject { ["error"] = "Bad request: " + bad }.ToJsonString());
@@ -555,31 +554,31 @@ app.Run(async http => {
 				bool hasAction = root.TryGetProperty("action_id", out var act) && act.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
 				var yesShow = shows.First(sh => sh.NewEventId == reg.EventId);
 				if (hasAction && act.ToString() != Issue(yesShow, RsvpYesAction).ToString()) {   // checked above to be an action of the show, but not the one that leads to the Confirmation
-					ConsoleEx.WriteLine($"   log-interaction for attendee {aid} with action_id {act}: not the rsvp_yes action ({Issue(yesShow, RsvpYesAction)}), so it does not trigger the confirmation email");
+					Console.WriteLineEx($"   log-interaction for attendee {aid} with action_id {act}: not the rsvp_yes action ({Issue(yesShow, RsvpYesAction)}), so it does not trigger the confirmation email");
 					hasAction = false;
 				}
 				bool first;
 				lock (reg) { first = hasAction && !reg.EmailTriggered; if (first) reg.EmailTriggered = true; }
-				if (!hasAction) ConsoleEx.WriteLine($"   log-interaction for attendee {aid}: no rsvp_yes action_id, so no confirmation email");
-				else if (!first) ConsoleEx.WriteLine($"   log-interaction for attendee {aid}: the confirmation email was already triggered");
+				if (!hasAction) Console.WriteLineEx($"   log-interaction for attendee {aid}: no rsvp_yes action_id, so no confirmation email");
+				else if (!first) Console.WriteLineEx($"   log-interaction for attendee {aid}: the confirmation email was already triggered");
 				else {
-					ConsoleEx.WriteLine($"   {Fg.Green}log-interaction for attendee {aid} with action_id {act}: triggers the confirmation email{Fg.Restore} (load-for-visitor?attendee={aid} {(reg.JourneyLoaded ? "was" : "was NOT")} called first)");
+					Console.WriteLineEx($"   [Green]log-interaction for attendee {aid} with action_id {act}: triggers the confirmation email[Restore] (load-for-visitor?attendee={aid} {(reg.JourneyLoaded ? "was" : "was NOT")} called first)");
 					if (sendEmail) _ = SendTestConfirmation(reg);
-					else ConsoleEx.WriteLine("   no email sent (start the server with --email to send the TEST confirmation)");
+					else Console.WriteLineEx("   no email sent (start the server with --email to send the TEST confirmation)");
 				}
 			}
 		} catch (JsonException) { /* not JSON: the captured answer below is enough */ }
 	}
 
 	if (rsvpOk && method == "PUT" && path.EndsWith("/attendees/rsvp") && BookingNumberNow() > MaxBookingNumber)
-		ConsoleEx.WriteLine($"   booking number would be {BookingNumberNow()} (> {MaxBookingNumber}): sold out, answering with the captured 'event is full'");
+		Console.WriteLineEx($"   booking number would be {BookingNumberNow()} (> {MaxBookingNumber}): sold out, answering with the captured 'event is full'");
 
 	string hostOnRequest = req.Host.Host;
 	var candidates = st.Hosts.Contains(hostOnRequest) ? new List<string> { hostOnRequest } : st.Hosts;
 	string? key = candidates.Select(h => Key(method, h, path, query)).FirstOrDefault(st.Sequences.ContainsKey);
 
 	if (key == null) {
-		ConsoleEx.WriteLine($"{Fg.Red}404 UNMATCHED: {Fg.Blue}{req.Method}{Fg.Red} {path}{(query == "" ? "" : "?" + query)}   [Host {req.Host}, Referer {req.Headers.Referer}]{Fg.Restore}");
+		Console.WriteLineEx($"[Red]404 UNMATCHED: [Blue]{req.Method}[Red] {path}{(query == "" ? "" : "?" + query)}   [Host {req.Host}, Referer {req.Headers.Referer}][Restore]");
 		http.Response.StatusCode = 404;
 		return;
 	}
@@ -587,8 +586,8 @@ app.Run(async http => {
 	var seq = st.Sequences[key];
 	var (resp, n, reused) = seq.Next();
 	string what = key[(method.Length + 1)..];
-	if (seq.Responses.Count == 1) ConsoleEx.WriteLine($"{Fg.Blue}{req.Method}{Fg.Restore} {what} -> {resp.Status}");
-	else ConsoleEx.WriteLine($"{Fg.Blue}{req.Method}{Fg.Restore} {what} -> response {n} of {seq.Responses.Count}{(reused ? " [reused]" : "")} ({resp.Status})");
+	if (seq.Responses.Count == 1) Console.WriteLineEx($"[Blue]{req.Method}[Restore] {what} -> {resp.Status}");
+	else Console.WriteLineEx($"[Blue]{req.Method}[Restore] {what} -> response {n} of {seq.Responses.Count}{(reused ? " [reused]" : "")} ({resp.Status})");
 
 	http.Response.StatusCode = resp.Status;
 	if (resp.ContentType != "") http.Response.ContentType = resp.ContentType;
@@ -599,7 +598,7 @@ app.Run(async http => {
 		var journey = (JsonObject)JsonNode.Parse(responseBody)!;
 		ApplyBookingClock(journey);
 		responseBody = Encoding.UTF8.GetBytes(journey.ToJsonString());
-		ConsoleEx.WriteLine($"   seats: {journey["journey"]!["signup_count"]} of {journey["journey"]!["capacity"]} taken, next booking number {journey["event"]!["next_registration_sequence_number"]}{(journey["is_over_capacity"]!.GetValue<bool>() ? " (over capacity)" : "")}");
+		Console.WriteLineEx($"   seats: {journey["journey"]!["signup_count"]} of {journey["journey"]!["capacity"]} taken, next booking number {journey["event"]!["next_registration_sequence_number"]}{(journey["is_over_capacity"]!.GetValue<bool>() ? " (over capacity)" : "")}");
 	}
 	http.Response.ContentLength = responseBody.Length;
 	if (req.Method != "HEAD") await http.Response.Body.WriteAsync(responseBody);
@@ -608,10 +607,10 @@ app.Run(async http => {
 string startUrl = $"http://localhost:{port}/";
 await app.StartAsync();
 ScheduleFlipLogs();
-ConsoleEx.WriteLine($"Replay server running at {Fg.Cyan}{startUrl}{Fg.Restore}");
+Console.WriteLineEx($"Replay server running at [Cyan]{startUrl}[Restore]");
 LogShowIds();
-ConsoleEx.WriteLine($"   The show list opens at {Fg.DarkYellow}{OpenAt().ToLocalTime():ddd MMM d HH:mm:ss}{Fg.Restore}. Sets a sooner time with /__replay/open-in/N.");
-if (failures) ConsoleEx.WriteLine($"   Failures Enabled (including: the first {HangPageRequests} registration page requests get no answer)");
+Console.WriteLineEx($"   The show list opens at [DarkYellow]{OpenAt().ToLocalTime():ddd MMM d HH:mm:ss}[Restore]. Sets a sooner time with /__replay/open-in/N.");
+if (failures) Console.WriteLineEx($"   Failures Enabled (including: the first {HangPageRequests} registration page requests get no answer)");
 Console.WriteLine("Ctrl+C to stop.");
 if (open) Process.Start(new ProcessStartInfo(startUrl) { UseShellExecute = true });
 await app.WaitForShutdownAsync();
@@ -622,7 +621,7 @@ void ScheduleFlipLogs() {
 	async Task At(DateTime when, string what) {
 		var wait = when - DateTime.UtcNow;
 		if (wait > TimeSpan.Zero) await Task.Delay(wait);
-		if (Interlocked.Read(ref openAtTicks) == mine) ConsoleEx.WriteLine($"*** FLIP: show list is now {what} ***");
+		if (Interlocked.Read(ref openAtTicks) == mine) Console.WriteLineEx($"*** FLIP: show list is now {what} ***");
 	}
 	_ = At(OpenAt(), "OPEN");
 	_ = At(OpenAt() + ClosedAfterOpen, "CLOSED");
@@ -652,8 +651,8 @@ async Task SendTestConfirmation(Registration reg) {
 	if (to.Equals("test@example.com", StringComparison.OrdinalIgnoreCase)) to = "rettigcd@gmail.com";   // the local userscript's placeholder address goes to the developer instead
 	try {
 		string? key = SmtpKey();
-		if (key == null) { ConsoleEx.WriteLine("   email skipped: no key (credentials/replay-smtp.txt or REPLAY_SMTP_KEY)"); return; }
-		if (!to.Contains('@')) { ConsoleEx.WriteLine($"   email skipped: \"{to}\" is not an email address"); return; }
+		if (key == null) { Console.WriteLineEx("   email skipped: no key (credentials/replay-smtp.txt or REPLAY_SMTP_KEY)"); return; }
+		if (!to.Contains('@')) { Console.WriteLineEx($"   email skipped: \"{to}\" is not an email address"); return; }
 		string uuid = reg.EventId;
 		string show = JsonNode.Parse(state.OpenTemplate.Body)!["events"]!.AsArray().FirstOrDefault(e => e!["uuid"]!.GetValue<string>() == uuid)?["name"]?.GetValue<string>() ?? "SNL Standby";
 		string nl = Environment.NewLine;
@@ -665,8 +664,8 @@ async Task SendTestConfirmation(Registration reg) {
 		};
 		using var smtp = new SmtpClient("smtp.gmail.com", 587) { EnableSsl = true, Credentials = new System.Net.NetworkCredential(SmtpUser, key) };
 		await smtp.SendMailAsync(mail);
-		ConsoleEx.WriteLine($"   TEST confirmation email sent to {to}");
-	} catch (Exception e) { ConsoleEx.WriteLine($"   TEST confirmation email to {to} FAILED: {e.GetBaseException().Message}"); }
+		Console.WriteLineEx($"   TEST confirmation email sent to {to}");
+	} catch (Exception e) { Console.WriteLineEx($"   TEST confirmation email to {to} FAILED: {e.GetBaseException().Message}"); }
 }
 
 // The calls that were slow in the 2026-10-01 capture (4 to 7 s at 10:00:25 to 10:00:47). Not the RSVP, the show list or the static files.
@@ -744,6 +743,47 @@ class Sequence {
 			_served++;
 			int n = Math.Min(_served, Responses.Count);
 			return (Responses[n - 1], n, _served > Responses.Count);
+		}
+	}
+}
+
+// ---- Console output with inline colours, time stamps and a log file ----
+// Console.WriteLineEx(text) / Console.WriteEx(text) (C# 14 extension members on Console): [Red] changes the colour of the text that follows; [Bg::Yellow] changes the
+// background ([Fg::Red] is the long form of [Red]); [Restore] / [Bg::Restore] go back to the colours the console had when the call started (they are also put back
+// when it returns). Colour names are ConsoleColor names, any case. Anything in brackets that is not a colour (a word like [reused], or [Bg::Purple]) is printed as is.
+// Console.TimeStamp = true puts the time (HH:mm:ss.fff) in front of every message. Console.LogPath = file appends every message to that file as plain text (no colour
+// tokens). One message at a time, so the colours and lines of different threads do not mix.
+public static class ConsoleExtensions {
+	static readonly object Lock = new();
+	static string? logFile;
+	static bool timeStamp;
+	extension(Console) {
+		public static string? LogPath { get => logFile; set => logFile = value; }
+		public static bool TimeStamp { get => timeStamp; set => timeStamp = value; }
+		public static void WriteEx(string text) => Print(text, false);
+		public static void WriteLineEx(string text) => Print(text, true);
+	}
+	static void Print(string text, bool newLine) {
+		lock (Lock) {
+			if (timeStamp) text = $"{DateTime.Now:HH:mm:ss.fff} " + text;
+			ConsoleColor fg = Console.ForegroundColor, bg = Console.BackgroundColor;
+			var plain = new System.Text.StringBuilder();
+			void Out(string t) { Console.Write(t); plain.Append(t); }
+			int pos = 0;
+			foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"\[(?:(Fg|Bg)::)?([A-Za-z]+)\]")) {
+				string name = m.Groups[2].Value;
+				bool restore = name.Equals("Restore", StringComparison.OrdinalIgnoreCase);
+				ConsoleColor c = default;
+				if (!restore && !Enum.TryParse(name, true, out c)) continue;   // not a colour: stays in the text
+				Out(text[pos..m.Index]);
+				pos = m.Index + m.Length;
+				if (m.Groups[1].Value == "Bg") Console.BackgroundColor = restore ? bg : c;
+				else Console.ForegroundColor = restore ? fg : c;
+			}
+			Out(text[pos..]);
+			if (newLine) Console.WriteLine();
+			Console.ForegroundColor = fg; Console.BackgroundColor = bg;
+			if (logFile != null) File.AppendAllText(logFile, plain + (newLine ? Environment.NewLine : ""));
 		}
 	}
 }
