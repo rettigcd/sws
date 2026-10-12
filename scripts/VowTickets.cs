@@ -1,5 +1,4 @@
 #:property PublishAot=false
-#:include ../snl-replay/ConsoleEx.cs
 // Signs up for SNL Standby tickets through the vow.app registration site (which replaced the Qudini booking widget).
 // It sends the same API calls a browser sends. --mode picks how much of the browser's flow is copied, because which steps the
 // server needs is NOT known. Which steps are needed was tested on 2026-09-24 against a full event; see "What was tested" below.
@@ -173,7 +172,7 @@ for (int i = 0; i < args.Length; i++) {
 	string? value = eq < 0 ? null : arg[(eq + 1)..];
 	switch (eq < 0 ? arg : arg[..eq]) {
 
-		case "--help" when value == null: foreach (string line in helpLines.SelectMany(l => WrapHelp(l, HelpWidth))) ConsoleEx.WriteLine(line); return 0;
+		case "--help" when value == null: foreach (string line in helpLines.SelectMany(l => WrapHelp(l, HelpWidth))) Console.WriteLineEx(line); return 0;
 
 		// attendee + show file (required; applied after all arguments are read, so the overrides below win)
 		case "--config" when value != null: configArg = value!; break;
@@ -254,7 +253,7 @@ if (replayServer != null) {
 	}
 	Vow.UseReplayServer(baseUrl);
 	if (openShowIn == null) runConfig.Wait = false;   // with --open-in the run waits for that open time (minus StartBeforeOpenMs), unless --no-wait
-	ConsoleEx.WriteLine($"REPLAY SERVER: every call goes to {baseUrl}, not to vow.app. No Pusher. " +
+	Console.WriteLineEx($"REPLAY SERVER: every call goes to {baseUrl}, not to vow.app. No Pusher. " +
 		(openShowIn == null ? "No wait for the run time." : runConfig.Wait ? "The run waits for the open time set by --open-in." : "No wait (--no-wait)."));
 }
 
@@ -278,8 +277,8 @@ catch (Exception ex) {
 	Console.Error.WriteLine($"Could not read {configPath}: {ex.Message}");
 	return 2;
 }
-ConsoleEx.WriteLine($"Config file: {Path.GetFullPath(configPath)}");
-ConsoleEx.WriteLine($"Mode: {runConfig.ModeName} ({runConfig.ModeDescription}){(runConfig.ModeGiven ? "" : " - the default; change it with --mode=min|partial|full")}");
+Console.WriteLineEx($"Config file: {Path.GetFullPath(configPath)}");
+Console.WriteLineEx($"Mode: {runConfig.ModeName} ({runConfig.ModeDescription}){(runConfig.ModeGiven ? "" : " - the default; change it with --mode=min|partial|full")}");
 context.InitializeFrom(config);
 selector = e => e.Name.Contains(context.Show, StringComparison.OrdinalIgnoreCase) && !e.HasPassed;
 if (config.RunAt == ForSNL)
@@ -302,7 +301,7 @@ Console.CancelKeyPress += (_, eventArgs) => {
 	if (!ctrlCStopsCleanly) return;
 	eventArgs.Cancel = true;
 	stop.Cancel();
-	ConsoleEx.WriteLine("\nCancelled. Exiting.");
+	Console.WriteLineEx("\nCancelled. Exiting.");
 };
 
 // ONE connection per host, using HTTP/2 (requests ask for it; see ApiRequest). HTTP/2 multiplexes, so the overlapping polls and
@@ -355,7 +354,7 @@ try {
 	// ---- Exit Ramp ----
 	if (runConfig.ListOnly) {
 		foreach (var e in context.Events)
-			ConsoleEx.WriteLine($"   {e.Uuid} Starts At:{DateTimeOffset.Parse(e.StartsAt):yyyy-MM-dd HH:mm:ss}  {e.Status,-12} {e.SlotsAvailable,4} seats  {e.Name}");
+			Console.WriteLineEx($"   {e.Uuid} Starts At:{DateTimeOffset.Parse(e.StartsAt):yyyy-MM-dd HH:mm:ss}  {e.Status,-12} {e.SlotsAvailable,4} seats  {e.Name}");
 		return 0;
 	}
 
@@ -371,8 +370,8 @@ try {
 	if (context.SelectedEvent.JourneyId == 0)
 		await Step4_PollUntilOpen(context);
 
-	ConsoleEx.WriteLine($"{Fg.Green}   Selected Event: \"{context.SelectedEvent.Name}\" on {context.SelectedEvent.StartsAt}, status {context.SelectedEvent.Status}, {context.SelectedEvent.SlotsAvailable} seats {Fg.Restore}(uuid {context.SelectedEvent.Uuid} journey {context.SelectedEvent.JourneyId})");
-	ConsoleEx.WriteLine($"   mode {runConfig.ModeName}: {runConfig.ModeDescription}");
+	Console.WriteLineEx($"[Green]   Selected Event: \"{context.SelectedEvent.Name}\" on {context.SelectedEvent.StartsAt}, status {context.SelectedEvent.Status}, {context.SelectedEvent.SlotsAvailable} seats [Restore](uuid {context.SelectedEvent.Uuid} journey {context.SelectedEvent.JourneyId})");
+	Console.WriteLineEx($"   mode {runConfig.ModeName}: {runConfig.ModeDescription}");
 
 	// 5-6. What the browser does when the registration page opens. (full mode only; not proven required)
 	// The page view is HTML from go.vow.app that the API cannot see, so nothing waits for it (it runs alongside the calls below).
@@ -404,9 +403,9 @@ try {
 	// ---- Exit Ramp ----
 	if (!runConfig.Submit) {
 		WriteStepLn(11, "submit RSVP", "dry run");
-		ConsoleEx.WriteLine($"   {Fg.Red}RSVP NOT submitted{Fg.Restore} (pass --submit to send)");
-		//ConsoleEx.WriteLine($"   PUT {Vow.ApiBase}/api/v2/events/{context.SelectedEvent.Uuid}/attendees/rsvp");
-		//ConsoleEx.WriteLine($"   {context.GetRsvpJson()}");
+		Console.WriteLineEx($"   [Red]RSVP NOT submitted[Restore] (pass --submit to send)");
+		//Console.WriteLineEx($"   PUT {Vow.ApiBase}/api/v2/events/{context.SelectedEvent.Uuid}/attendees/rsvp");
+		//Console.WriteLineEx($"   {context.GetRsvpJson()}");
 		return 0;
 	}
 
@@ -443,13 +442,13 @@ finally {
 	if (context.RsvpAccepted && showOpenTime != null) {
 		DateTime finished = DateTime.Now;
 		string took = $"Completed successfully {(finished - showOpenTime.Value).TotalSeconds:0.0} s after the show opened ({showOpenTime.Value:HH:mm:ss.fff}); the RSVP was accepted {(context.RsvpAcceptedAt!.Value - showOpenTime.Value).TotalSeconds:0.0} s after it opened.";
-		ConsoleEx.WriteLine($"{Fg.Green}{took}{Fg.Restore}");
+		Console.WriteLineEx($"[Green]{took}[Restore]");
 		LogLn($"{finished:yyyy-MM-dd HH:mm:ss.fff} {took}");
 	}
 	string logPath = $"vow_{scriptStart:yyyy-MM-dd_HH-mm-ss}.log";
 	lock (logItems)
 		File.WriteAllText(logPath, string.Concat(logItems));
-	ConsoleEx.WriteLine($"Log written to {Path.GetFullPath(logPath)}");
+	Console.WriteLineEx($"Log written to {Path.GetFullPath(logPath)}");
 }
 
 // ==================================
@@ -461,7 +460,7 @@ bool WaitUntilRunTime() {
 	if (runTime <= now) return true;
 
 	if (!runConfig.Submit) {
-		ConsoleEx.WriteLine($"{Fg.Red}WARNING: The RSVP will NOT be submitted.{Fg.Restore} Use --submit to ensure submission.\r\n");
+		Console.WriteLineEx($"[Red]WARNING: The RSVP will NOT be submitted.[Restore] Use --submit to ensure submission.\r\n");
 	}
 
 	ctrlCStopsCleanly = true;
@@ -476,7 +475,7 @@ bool WaitUntilRunTime() {
 			}
 			TimeSpan remaining = runTime - now;
 			countdownShowing = true;
-			ConsoleEx.Write($"\rRun In: {Fg.For(remaining < redTimeSpan ? ConsoleColor.Red : ConsoleColor.Green)}{remaining.Days} Days {remaining:hh\\:mm\\:ss}{Fg.Restore} at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
+			Console.WriteEx($"\rRun In: [{(remaining < redTimeSpan ? "Red" : "Green")}]{remaining.Days} Days {remaining:hh\\:mm\\:ss}[Restore] at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
 			stop.Token.WaitHandle.WaitOne((int)Math.Min(remaining.TotalMilliseconds, 500));
 			now = DateTime.Now;
 		}
@@ -486,7 +485,7 @@ bool WaitUntilRunTime() {
 	}
 	ctrlCStopsCleanly = false;
 	countdownShowing = false;
-	ConsoleEx.WriteLine("");
+	Console.WriteLineEx("");
 
 	return !stop.IsCancellationRequested;
 }
@@ -504,7 +503,7 @@ void SetCursorVisible(bool visible) {
 async Task CheckShowNameAsync() {
 	const int stepNumber = 2;
 	const string stepName = "check the show name";
-	void OwnLine() { if (countdownShowing) { countdownShowing = false; ConsoleEx.WriteLine(""); } }   // the countdown is rewritten in place: leave its line alone
+	void OwnLine() { if (countdownShowing) { countdownShowing = false; Console.WriteLineEx(""); } }   // the countdown is rewritten in place: leave its line alone
 	bool first = firstShowCheck;
 	firstShowCheck = false;
 	bool stepPrinted = false;
@@ -539,7 +538,7 @@ async Task CheckShowNameAsync() {
 	lastShowCheck = message;
 	OwnLine();
 	if (color != ConsoleColor.Green && reply != null && !stepPrinted) WriteStepLn(stepNumber, stepName, reply.Details);   // a new problem: show the request that found it
-	ConsoleEx.WriteLine($"{Fg.For(color)}{message}{Fg.Restore}");
+	Console.WriteLineEx($"[{color}]{message}[Restore]");
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}");
 }
 
@@ -605,7 +604,7 @@ async Task Step4_PollUntilOpen(Context context, int intervalMs = 250, int maxInF
 			return (number, null);	// called off because the polling is over
 		}
 		catch (Exception ex) {
-			ConsoleEx.WriteLine($"   poll {number} failed ({Excerpt(ex.Message, 200)}); the others continue");
+			Console.WriteLineEx($"   poll {number} failed ({Excerpt(ex.Message, 200)}); the others continue");
 			return (number, null);
 		}
 	}
@@ -646,7 +645,7 @@ async Task Step4_PollUntilOpen(Context context, int intervalMs = 250, int maxInF
 				if (current.JourneyId != 0) {
 					context.Events = events;
 					context.SelectedEvent = current;
-					ConsoleEx.WriteLine($"   open in poll {number} (of {polls} started): status {current.Status}, journey {current.JourneyId}");
+					Console.WriteLineEx($"   open in poll {number} (of {polls} started): status {current.Status}, journey {current.JourneyId}");
 					return;
 				}
 			}
@@ -674,8 +673,8 @@ async Task Step7_LoadJourney(Context context) {
 	Journey journey = context.Journey.Journey;
 	JourneyStep? landing = journey.Steps.FirstOrDefault(s => s.IsRoot);
 	JourneyStep? rsvp = journey.Steps.FirstOrDefault(s => s.Type == "rsvp");
-	ConsoleEx.WriteLine($"   capacity {journey.Capacity}, signed up {journey.SignupCount}, over capacity: {context.Journey.IsOverCapacity}");
-	ConsoleEx.WriteLine($"   landing step {landing?.Id}, rsvp step {rsvp?.Id} (max plus-ones {rsvp?.Options?.MaxPlusOnes}), closed step {journey.CapacityStepId}");
+	Console.WriteLineEx($"   capacity {journey.Capacity}, signed up {journey.SignupCount}, over capacity: {context.Journey.IsOverCapacity}");
+	Console.WriteLineEx($"   landing step {landing?.Id}, rsvp step {rsvp?.Id} (max plus-ones {rsvp?.Options?.MaxPlusOnes}), closed step {journey.CapacityStepId}");
 	if (context.Journey.IsOverCapacity)
 		WriteWarning("The server reports the event is over capacity; the RSVP will probably be refused.");
 }
@@ -700,17 +699,17 @@ async Task Step11_SubmitRsvp(Context context) {
 			reply = await SendAsync(11, "submit RSVP", request);
 		}
 		catch (Exception ex) when (attempt < RsvpMaxAttempts && IsRetryable(ex)) {
-			ConsoleEx.WriteLine($"   RSVP try {attempt} of {RsvpMaxAttempts} got no answer ({ex.Message}); it may or may not have reached the server. Trying again in {RsvpRetryDelayMs} ms");
+			Console.WriteLineEx($"   RSVP try {attempt} of {RsvpMaxAttempts} got no answer ({ex.Message}); it may or may not have reached the server. Trying again in {RsvpRetryDelayMs} ms");
 			await Task.Delay(RsvpRetryDelayMs);
 			continue;
 		}
 		if ((int)reply.Status < 500 || attempt >= RsvpMaxAttempts)
 			break;
 		if (int.TryParse(reply.RateRemaining, out int left) && left < RsvpMinRateRemaining) {
-			ConsoleEx.WriteLine($"   RSVP try {attempt} returned {(int)reply.Status}, but only {left} requests are left in the rate limit (less than {RsvpMinRateRemaining}): not trying again.");
+			Console.WriteLineEx($"   RSVP try {attempt} returned {(int)reply.Status}, but only {left} requests are left in the rate limit (less than {RsvpMinRateRemaining}): not trying again.");
 			break;
 		}
-		ConsoleEx.WriteLine($"   RSVP try {attempt} of {RsvpMaxAttempts} returned {(int)reply.Status}; trying again in {RsvpRetryDelayMs} ms");
+		Console.WriteLineEx($"   RSVP try {attempt} of {RsvpMaxAttempts} returned {(int)reply.Status}; trying again in {RsvpRetryDelayMs} ms");
 		await Task.Delay(RsvpRetryDelayMs);
 	}
 
@@ -729,12 +728,12 @@ async Task Step11_SubmitRsvp(Context context) {
 		var places = (created ?? []).Where(a => a.RegistrationSequenceNumber != null)
 			.OrderByDescending(a => a.IsPrimary).Select(a => a.RegistrationSequenceNumber!.Value).ToList();
 		if (primary == null) {   // not the shape seen on 2026-10-08: show what came back
-			ConsoleEx.WriteLine($"{Fg.Yellow}   registered (2xx), but the answer has no attendees. Body: {Excerpt(reply.Body, 1000)}{Fg.Restore}");
+			Console.WriteLineEx($"[Yellow]   registered (2xx), but the answer has no attendees. Body: {Excerpt(reply.Body, 1000)}[Restore]");
 			return;
 		}
-		ConsoleEx.WriteLine($"{Fg.Green}   REGISTERED for {selected.Name}{Fg.Restore}");
-		ConsoleEx.WriteLine($"{Fg.Cyan}   Booking reference: {primary.RegistrationReference ?? "(not found in the response)"}{Fg.Restore}");
-		ConsoleEx.WriteLine($"{Fg.Cyan}   In our standby reservation line, your number(s) are: {(places.Count > 0 ? string.Join(", ", places) : "(not found in the response)")}.{Fg.Restore}");
+		Console.WriteLineEx($"[Green]   REGISTERED for {selected.Name}[Restore]");
+		Console.WriteLineEx($"[Cyan]   Booking reference: {primary.RegistrationReference ?? "(not found in the response)"}[Restore]");
+		Console.WriteLineEx($"[Cyan]   In our standby reservation line, your number(s) are: {(places.Count > 0 ? string.Join(", ", places) : "(not found in the response)")}.[Restore]");
 		return;
 	}
 
@@ -896,10 +895,10 @@ DateTime GetNextThursday10Am(int msOffset) {
 
 // The one status line of a numbered step ("11. submit RSVP: PUT ... -> 200"): the number, the step name in blue, then the details. Called once per step; the
 // extra lines a step prints (results, retries, warnings) are not step lines.
-void WriteStepLn(int stepNum, string stepName, string details) => ConsoleEx.WriteLine($"{stepNum}. {Fg.Blue}{stepName}{Fg.Restore}: {details}");
+void WriteStepLn(int stepNum, string stepName, string details) => Console.WriteLineEx($"{stepNum}. [Blue]{stepName}[Restore]: {details}");
 
 void WriteWarning(string message) {
-	ConsoleEx.WriteLine($"{Fg.Red}   WARNING: {Fg.Restore}{message}");
+	Console.WriteLineEx($"[Red]   WARNING: [Restore]{message}");
 }
 
 // Replay server only (--open-in): GET /__replay/open-in/N. The reply says when the show opens and the new ids.
@@ -911,14 +910,14 @@ async Task OpenShowInAsync(double seconds) {
 	using var response = await http.SendAsync(request);
 	string body = await response.Content.ReadAsStringAsync();
 	WriteStepLn(1, label, $"GET {path} -> {(int)response.StatusCode}");
-	ConsoleEx.WriteLine($"   {Excerpt(body, 400)}");
+	Console.WriteLineEx($"   {Excerpt(body, 400)}");
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} 1. {label}: {(int)response.StatusCode} {body}");
 	if (!response.IsSuccessStatusCode)
 		throw new InvalidOperationException($"The replay server did not accept {path}: {(int)response.StatusCode} {Excerpt(body, 200)}");
 	// the run time becomes this open time, less the usual lead, so the wait for the run time (the "Run In:" countdown) counts down to it
 	runTime = opensAt.AddMilliseconds(-StartBeforeOpenMs);
 	showOpenTime = opensAt;
-	ConsoleEx.WriteLine($"   run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
+	Console.WriteLineEx($"   run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} run time set to {runTime:HH:mm:ss.fff}; the show opens at {opensAt:HH:mm:ss.fff}");
 }
 
@@ -1064,7 +1063,7 @@ async Task<string> SendWithRetryAsync(int stepNumber, string label, Func<HttpReq
 			return Require(await SendAsync(stepNumber, label, makeRequest(), timeout)).Body;
 		}
 		catch (Exception ex) when (IsRetryable(ex) && budget.Elapsed < TimeSpan.FromSeconds(budgetSeconds)) {
-			ConsoleEx.WriteLine($"   attempt {attempt} failed ({ex.Message}); trying again in {RetryDelayMs} ms ({budget.Elapsed.TotalSeconds:0.0} of {budgetSeconds} s used)");
+			Console.WriteLineEx($"   attempt {attempt} failed ({ex.Message}); trying again in {RetryDelayMs} ms ({budget.Elapsed.TotalSeconds:0.0} of {budgetSeconds} s used)");
 			await Task.Delay(RetryDelayMs);
 		}
 	}
@@ -1183,7 +1182,7 @@ public sealed class Context {
 	public int? AttendeeId { get; set; }
 
 	public void InitializeFrom(UserConfig config) {
-		ConsoleEx.WriteLine($"Using config:\r\n\tseries: {config.Series},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tgroup size: {config.GroupSize}\r\n");
+		Console.WriteLineEx($"Using config:\r\n\tseries: {config.Series},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tgroup size: {config.GroupSize}\r\n");
 		Series = config.Series;
 		Show = config.Show;
 		FirstName = config.FirstName;
@@ -1206,7 +1205,7 @@ public sealed class Context {
 			: Journey.Journey.Steps.FirstOrDefault(s => s.Type == "rsvp")?.Options?.MaxPlusOnes ?? 0;
 		int wanted = Math.Max(GroupSize - 1, 0);
 		if (wanted > maxPlusOnes)
-			ConsoleEx.WriteLine($"   WARNING: group size {GroupSize} needs {wanted} plus-one(s) but this journey allows {maxPlusOnes}; reduced to fit.");
+			Console.WriteLineEx($"   WARNING: group size {GroupSize} needs {wanted} plus-one(s) but this journey allows {maxPlusOnes}; reduced to fit.");
 		return Math.Min(wanted, maxPlusOnes);
 	}
 
@@ -1423,4 +1422,36 @@ public sealed class LogInteractionRequest {
 	public object? ActionId { get; set; }
 	[JsonPropertyName("session")]
 	public long Session { get; set; }
+}
+
+// ---- Console output with inline colours ----
+// Console.WriteLineEx(text) / Console.WriteEx(text) (C# 14 extension members on Console): [Red] changes the colour of the text that follows; [Bg::Yellow] changes the
+// background ([Fg::Red] is the long form of [Red]); [Restore] / [Bg::Restore] go back to the colours the console had when the call started (they are also put back
+// when it returns). Colour names are ConsoleColor names, any case. Anything in brackets that is not a colour (a word like [options], or [Bg::Purple]) is printed as is.
+// One message at a time, so threads do not mix colours.
+public static class ConsoleExtensions {
+	static readonly object Lock = new();
+	extension(Console) {
+		public static void WriteEx(string text) => Print(text, false);
+		public static void WriteLineEx(string text) => Print(text, true);
+	}
+	static void Print(string text, bool newLine) {
+		lock (Lock) {
+			ConsoleColor fg = Console.ForegroundColor, bg = Console.BackgroundColor;
+			int pos = 0;
+			foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"\[(?:(Fg|Bg)::)?([A-Za-z]+)\]")) {
+				string name = m.Groups[2].Value;
+				bool restore = name.Equals("Restore", StringComparison.OrdinalIgnoreCase);
+				ConsoleColor c = default;
+				if (!restore && !Enum.TryParse(name, true, out c)) continue;   // not a colour: stays in the text
+				Console.Write(text[pos..m.Index]);
+				pos = m.Index + m.Length;
+				if (m.Groups[1].Value == "Bg") Console.BackgroundColor = restore ? bg : c;
+				else Console.ForegroundColor = restore ? fg : c;
+			}
+			Console.Write(text[pos..]);
+			if (newLine) Console.WriteLine();
+			Console.ForegroundColor = fg; Console.BackgroundColor = bg;
+		}
+	}
 }
