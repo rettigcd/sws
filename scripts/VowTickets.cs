@@ -403,9 +403,10 @@ try {
 
 	// ---- Exit Ramp ----
 	if (!runConfig.Submit) {
-		WriteStepLn("11. submit RSVP", "dry run, NOT sent (pass --submit to send)");
-		ConsoleEx.WriteLine($"   PUT {Vow.ApiBase}/api/v2/events/{context.SelectedEvent.Uuid}/attendees/rsvp");
-		ConsoleEx.WriteLine($"   {context.GetRsvpJson()}");
+		WriteStepLn(11, "submit RSVP", "dry run");
+		ConsoleEx.WriteLine($"   {Fg.Red}RSVP NOT submitted{Fg.Restore} (pass --submit to send)");
+		//ConsoleEx.WriteLine($"   PUT {Vow.ApiBase}/api/v2/events/{context.SelectedEvent.Uuid}/attendees/rsvp");
+		//ConsoleEx.WriteLine($"   {context.GetRsvpJson()}");
 		return 0;
 	}
 
@@ -501,7 +502,8 @@ void SetCursorVisible(bool visible) {
 // The step line ("2. check the show name: GET ... -> 200") is printed by the first check, and later only when the request failed or the check
 // found a problem that is new (the show is not in the list, the list is empty, the list could not be read).
 async Task CheckShowNameAsync() {
-	const string stepName = "2. check the show name";
+	const int stepNumber = 2;
+	const string stepName = "check the show name";
 	void OwnLine() { if (countdownShowing) { countdownShowing = false; ConsoleEx.WriteLine(""); } }   // the countdown is rewritten in place: leave its line alone
 	bool first = firstShowCheck;
 	firstShowCheck = false;
@@ -510,8 +512,8 @@ async Task CheckShowNameAsync() {
 	string message;
 	Reply? reply = null;
 	try {
-		reply = await SendAsync(stepName, EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs), quiet: true);
-		if (first || !reply.Ok) { OwnLine(); WriteStepLn(stepName, reply.Details); stepPrinted = true; }
+		reply = await SendAsync(stepNumber, stepName, EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs), quiet: true);
+		if (first || !reply.Ok) { OwnLine(); WriteStepLn(stepNumber, stepName, reply.Details); stepPrinted = true; }
 		List<VowEvent> events = ParseEvents(Require(reply).Body);
 		string names = string.Join(", ", events.Select(e => $"\"{e.Name}\" ({e.Status})"));
 		List<VowEvent> matches = events.Where(selector).ToList();
@@ -536,7 +538,7 @@ async Task CheckShowNameAsync() {
 	if (message == lastShowCheck) return;
 	lastShowCheck = message;
 	OwnLine();
-	if (color != ConsoleColor.Green && reply != null && !stepPrinted) WriteStepLn(stepName, reply.Details);   // a new problem: show the request that found it
+	if (color != ConsoleColor.Green && reply != null && !stepPrinted) WriteStepLn(stepNumber, stepName, reply.Details);   // a new problem: show the request that found it
 	ConsoleEx.WriteLine($"{Fg.For(color)}{message}{Fg.Restore}");
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}");
 }
@@ -554,7 +556,7 @@ async Task Step3_GetEventsList(Context context) {
 	// - status is "coming_soon" -> "open" -> "closed" (the front end shows a Register button only for "open")
 	// The browser also sends X-Socket-ID here, but it has no socket yet on the first call ("undefined" was sent and accepted).
 	// Read-only, so it is retried on a 5xx or network failure.
-	string json = await SendWithRetryAsync("3. get events list", EventsListRequest, TimeSpan.FromMilliseconds(PollTimeoutMs));
+	string json = await SendWithRetryAsync(3, "get events list", EventsListRequest, TimeSpan.FromMilliseconds(PollTimeoutMs));
 	context.Events = ParseEvents(json);
 }
 
@@ -596,7 +598,7 @@ async Task Step4_PollUntilOpen(Context context, int intervalMs = 250, int maxInF
 
 	async Task<(int Number, List<VowEvent>? Events)> PollOnceAsync(int number) {
 		try {
-			string json = Require(await SendAsync($"4. poll {number}", EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs), pollStop.Token)).Body;
+			string json = Require(await SendAsync(4, $"poll {number}", EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs), pollStop.Token)).Body;
 			return (number, ParseEvents(json));
 		}
 		catch (OperationCanceledException) when (pollStop.IsCancellationRequested) {
@@ -663,7 +665,7 @@ async Task Step7_LoadJourney(Context context) {
 	// - Gives the ids we need: landing step, RSVP step, the "Continue" action, and max_plus_ones (guest limit).
 	// Step ids change every week (they belong to the journey), so they are read here and never hard-coded.
 	VowEvent selected = context.SelectedEvent!;
-	string json = await SendWithRetryAsync("7. load journey",
+	string json = await SendWithRetryAsync(7, "load journey",
 		() => ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/load-for-visitor", Vow.GoOrigin),
 		TimeSpan.FromMilliseconds(JourneyTimeoutMs), JourneyBudgetSeconds);
 	context.Journey = JsonSerializer.Deserialize<JourneyResponse>(json, JsonOptions)
@@ -695,7 +697,7 @@ async Task Step11_SubmitRsvp(Context context) {
 		var request = ApiRequest(HttpMethod.Put, $"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/attendees/rsvp", Vow.GoOrigin,
 			json: context.GetRsvpJson(), useSocketId: true);
 		try {
-			reply = await SendAsync("11. submit RSVP", request);
+			reply = await SendAsync(11, "submit RSVP", request);
 		}
 		catch (Exception ex) when (attempt < RsvpMaxAttempts && IsRetryable(ex)) {
 			ConsoleEx.WriteLine($"   RSVP try {attempt} of {RsvpMaxAttempts} got no answer ({ex.Message}); it may or may not have reached the server. Trying again in {RsvpRetryDelayMs} ms");
@@ -757,7 +759,7 @@ async Task Step5_OpenRegistrationPage(Context context) {
 	// ---- Step 5: open the registration page (the register_url the Register button links to). ----
 	// GET https://go.vow.app/event/{uuid}/journeys/{journey_id}  -> the Nuxt single-page-app shell. Only load balancer cookies are set.
 	VowEvent selected = context.SelectedEvent!;
-	await RunOptionalAsync("5. open registration page", async () => {
+	await RunOptionalAsync(5, "open registration page", async () => {
 		var request = new HttpRequestMessage(HttpMethod.Get, $"{Vow.GoOrigin}/event/{selected.Uuid}/journeys/{selected.JourneyId}") {
 			Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
 		};
@@ -767,7 +769,7 @@ async Task Step5_OpenRegistrationPage(Context context) {
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
 		request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "cross-site");
 		request.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
-		Require(await SendAsync("5. open registration page", request, TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
+		Require(await SendAsync(5, "open registration page", request, TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
 	});
 }
 
@@ -777,8 +779,8 @@ async Task Step6_CheckAuthUser(Context context) {
 	// POSSIBLE EARLY CALL: the URL has no event or journey and an anonymous visitor always gets 401, so this could be sent before the
 	// event opens (during the polling). Its only side effect is setting the Laravel cookies, which last 15 days. Kept after the opening
 	// for now because that is the browser's order (a server comparing timestamps could notice the difference). Untested either way.
-	await RunOptionalAsync("6. check auth user", async () => {
-		await SendAsync("6. check auth user (401 expected)", ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/auth/user", Vow.GoOrigin), TimeSpan.FromMilliseconds(OptionalTimeoutMs));
+	await RunOptionalAsync(6, "check auth user", async () => {
+		await SendAsync(6, "check auth user (401 expected)", ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/auth/user", Vow.GoOrigin), TimeSpan.FromMilliseconds(OptionalTimeoutMs));
 	});
 }
 
@@ -793,8 +795,8 @@ async Task Step8_ConnectPusher(Context context) {
 	//   {"event":"pusher:connection_established","data":"{\"socket_id\":\"1677674.4468990\",\"activity_timeout\":120}"}
 	// The socket id is sent as X-Socket-ID on the log-interaction and RSVP calls (Laravel uses it to skip the sender when it broadcasts).
 	// No channel is subscribed to in the capture, so the socket only needs to stay open; it is disposed when the script ends.
-	if (Vow.IsReplay) { WriteStepLn("8. connect pusher", "skipped (the replay server has no Pusher; no X-Socket-ID is sent)"); return; }
-	await RunOptionalAsync("8. connect pusher", async () => {
+	if (Vow.IsReplay) { WriteStepLn(8, "connect pusher", "skipped (the replay server has no Pusher; no X-Socket-ID is sent)"); return; }
+	await RunOptionalAsync(8, "connect pusher", async () => {
 		var socket = new ClientWebSocket();
 		socket.Options.SetRequestHeader("Origin", Vow.GoOrigin);
 		socket.Options.SetRequestHeader("User-Agent", Vow.UserAgent);
@@ -812,7 +814,7 @@ async Task Step8_ConnectPusher(Context context) {
 			throw new InvalidOperationException($"Unexpected first Pusher message: {Excerpt(message, 200)}");
 		using JsonDocument inner = JsonDocument.Parse(outer.RootElement.GetProperty("data").GetString()!);
 		context.SocketId = inner.RootElement.GetProperty("socket_id").GetString();
-		WriteStepLn("8. connect pusher", $"connected, socket id {context.SocketId}");
+		WriteStepLn(8, "connect pusher", $"connected, socket id {context.SocketId}");
 	});
 }
 
@@ -820,7 +822,7 @@ async Task Step9_LogLandingView(Context context) {
 	// ---- Step 9: report the landing page as the visitor's current step. ----
 	JourneyStep? landing = context.Journey?.Journey.Steps.FirstOrDefault(s => s.IsRoot);
 	if (landing == null) return;
-	await LogInteractionAsync("9. log landing view", landing.Id, actionId: null);
+	await LogInteractionAsync(9, "log landing view", landing.Id, actionId: null);
 }
 
 async Task Step10_LogContinueClick(Context context) {
@@ -831,7 +833,7 @@ async Task Step10_LogContinueClick(Context context) {
 	JourneyStep? rsvp = journey?.Steps.FirstOrDefault(s => s.Type == "rsvp");
 	JourneyAction? cont = journey?.Actions.FirstOrDefault(a => a.From == landing?.Id && a.To == rsvp?.Id);
 	if (rsvp == null) return;
-	await LogInteractionAsync("10. log continue click", rsvp.Id, cont?.Id.ToString());
+	await LogInteractionAsync(10, "log continue click", rsvp.Id, cont?.Id.ToString());
 }
 
 // Steps 12 and 13 together, one after the other: what the page does after the RSVP answer (partial and full modes).
@@ -846,8 +848,8 @@ async Task Step12_LoadJourneyForAttendee(Context context) {
 	// Whether it is needed for the confirmation email is not known (the script sent both when the email came).
 	if (!context.RsvpAccepted || context.AttendeeId == null) return;
 	VowEvent selected = context.SelectedEvent!;
-	await RunOptionalAsync("12. load journey for attendee", async () => {
-		Require(await SendAsync("12. load journey for attendee", ApiRequest(HttpMethod.Get,
+	await RunOptionalAsync(12, "load journey for attendee", async () => {
+		Require(await SendAsync(12, "load journey for attendee", ApiRequest(HttpMethod.Get,
 			$"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/load-for-visitor?attendee={context.AttendeeId}", Vow.GoOrigin),
 			TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
 	});
@@ -864,12 +866,12 @@ async Task Step13_LogRsvpResult(Context context) {
 	JourneyAction? yes = journey?.Actions.FirstOrDefault(a => a.From == rsvp?.Id && a.Function == "rsvp_yes");
 	if (!context.RsvpAccepted) {
 		if (journey != null)
-			await LogInteractionAsync("13. log rsvp result", journey.CapacityStepId, actionId: null);
+			await LogInteractionAsync(13, "log rsvp result", journey.CapacityStepId, actionId: null);
 		return;
 	}
 	if (yes == null) { WriteWarning("13. log rsvp result: the journey has no rsvp_yes action; not sent (the confirmation email may not be sent)."); return; }
 	if (context.AttendeeId == null) WriteWarning("13. the RSVP response had no attendee id; this report is sent without it (the confirmation email may not be sent).");
-	await LogInteractionAsync("13. log rsvp result", yes.To, actionId: yes.Id, attendeeId: context.AttendeeId);
+	await LogInteractionAsync(13, "log rsvp result", yes.To, actionId: yes.Id, attendeeId: context.AttendeeId);
 }
 
 
@@ -892,9 +894,9 @@ DateTime GetNextThursday10Am(int msOffset) {
 	return targetDate.AddHours(10).AddMilliseconds(msOffset);
 }
 
-// The one status line of a numbered step ("11. submit RSVP: PUT ... -> 200"): the step name in blue, then the details. Called once per step; the
+// The one status line of a numbered step ("11. submit RSVP: PUT ... -> 200"): the number, the step name in blue, then the details. Called once per step; the
 // extra lines a step prints (results, retries, warnings) are not step lines.
-void WriteStepLn(string stepName, string details) => ConsoleEx.WriteLine($"{Fg.Blue}{stepName}{Fg.Restore}: {details}");
+void WriteStepLn(int stepNum, string stepName, string details) => ConsoleEx.WriteLine($"{stepNum}. {Fg.Blue}{stepName}{Fg.Restore}: {details}");
 
 void WriteWarning(string message) {
 	ConsoleEx.WriteLine($"{Fg.Red}   WARNING: {Fg.Restore}{message}");
@@ -903,14 +905,14 @@ void WriteWarning(string message) {
 // Replay server only (--open-in): GET /__replay/open-in/N. The reply says when the show opens and the new ids.
 async Task OpenShowInAsync(double seconds) {
 	string path = $"/__replay/open-in/{seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-	string label = $"1. open the replay server's show in {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
+	string label = $"open the replay server's show in {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
 	using var request = new HttpRequestMessage(HttpMethod.Get, Vow.ApiBase + path);
 	DateTime opensAt = DateTime.Now.AddSeconds(seconds);   // when the server will open the show (it counts from the moment it gets the request)
 	using var response = await http.SendAsync(request);
 	string body = await response.Content.ReadAsStringAsync();
-	WriteStepLn(label, $"GET {path} -> {(int)response.StatusCode}");
+	WriteStepLn(1, label, $"GET {path} -> {(int)response.StatusCode}");
 	ConsoleEx.WriteLine($"   {Excerpt(body, 400)}");
-	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {label}: {(int)response.StatusCode} {body}");
+	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} 1. {label}: {(int)response.StatusCode} {body}");
 	if (!response.IsSuccessStatusCode)
 		throw new InvalidOperationException($"The replay server did not accept {path}: {(int)response.StatusCode} {Excerpt(body, 200)}");
 	// the run time becomes this open time, less the usual lead, so the wait for the run time (the "Run In:" countdown) counts down to it
@@ -1012,9 +1014,9 @@ void LogNoResponse(Guid requestId, TimeSpan elapsed, Exception ex) {
 //          inside, which IsRetryable counts as retryable. null = HttpClient's own 100 s.
 // cancel:  lets the caller call the request off (a poll that is no longer needed); that is an OperationCanceledException, not a timeout.
 // quiet: do not print the step line; the caller prints it (reply.Details) when it wants to. The request and the answer are logged as always.
-async Task<Reply> SendAsync(string label, HttpRequestMessage request, TimeSpan? timeout = null, CancellationToken cancel = default, bool quiet = false) {
+async Task<Reply> SendAsync(int stepNumber, string label, HttpRequestMessage request, TimeSpan? timeout = null, CancellationToken cancel = default, bool quiet = false) {
 	Guid requestId = Guid.NewGuid();
-	await LogRequestAsync(requestId, label, request);
+	await LogRequestAsync(requestId, $"{stepNumber}. {label}", request);   // the log keeps the numbered name
 	var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 	HttpResponseMessage response;
 	string body;
@@ -1040,7 +1042,7 @@ async Task<Reply> SendAsync(string label, HttpRequestMessage request, TimeSpan? 
 	string? retryAfter = response.Headers.TryGetValues("Retry-After", out var retry) ? retry.First() : null;
 	string rate = rateLimit != null ? $"  [rate limit {rateRemaining ?? "?"}/{rateLimit} left]" : "";
 	string details = $"{request.Method} {request.RequestUri!.AbsolutePath} -> {(int)response.StatusCode}{rate}";
-	if (!quiet) WriteStepLn(label, details);
+	if (!quiet) WriteStepLn(stepNumber, label, details);
 	return new Reply(response.StatusCode, body, rateRemaining, retryAfter, details);
 }
 
@@ -1055,11 +1057,11 @@ Reply Require(Reply reply) {
 // For READ-ONLY steps only: retries after a 5xx or a network error, one at a time (no duplicates in flight), RetryDelayMs apart, for up to
 // RetryBudgetSeconds from the first try. Never use this for the RSVP: it has its own, stricter retry in Step11_SubmitRsvp (rate limit,
 // docs/VOW_SNL_FLOW.md 5.4).
-async Task<string> SendWithRetryAsync(string label, Func<HttpRequestMessage> makeRequest, TimeSpan? timeout = null, int budgetSeconds = RetryBudgetSeconds) {
+async Task<string> SendWithRetryAsync(int stepNumber, string label, Func<HttpRequestMessage> makeRequest, TimeSpan? timeout = null, int budgetSeconds = RetryBudgetSeconds) {
 	var budget = System.Diagnostics.Stopwatch.StartNew();
 	for (int attempt = 1; ; attempt++) {
 		try {
-			return Require(await SendAsync(label, makeRequest(), timeout)).Body;
+			return Require(await SendAsync(stepNumber, label, makeRequest(), timeout)).Body;
 		}
 		catch (Exception ex) when (IsRetryable(ex) && budget.Elapsed < TimeSpan.FromSeconds(budgetSeconds)) {
 			ConsoleEx.WriteLine($"   attempt {attempt} failed ({ex.Message}); trying again in {RetryDelayMs} ms ({budget.Elapsed.TotalSeconds:0.0} of {budgetSeconds} s used)");
@@ -1071,23 +1073,23 @@ async Task<string> SendWithRetryAsync(string label, Func<HttpRequestMessage> mak
 bool IsRetryable(Exception ex) => ex is HttpRequestException { StatusCode: null } or TaskCanceledException
 	|| ex is HttpRequestException { StatusCode: { } code } && (int)code >= 500;
 
-async Task RunOptionalAsync(string label, Func<Task> action) {
+async Task RunOptionalAsync(int stepNumber, string label, Func<Task> action) {
 	try {
 		await action();
 	}
 	catch (Exception ex) {
-		Console.Error.WriteLine($"{label}: browser-mimicking step failed and was skipped: {Excerpt(ex.Message, 300)}");
+		Console.Error.WriteLine($"{stepNumber}. {label}: browser-mimicking step failed and was skipped: {Excerpt(ex.Message, 300)}");
 	}
 }
 
-async Task LogInteractionAsync(string label, int stepId, object? actionId, int? attendeeId = null) {
+async Task LogInteractionAsync(int stepNumber, string label, int stepId, object? actionId, int? attendeeId = null) {
 	// POST /api/v2/events/{uuid}/journeys/{journey_id}/log-interaction  {["attendee_id":N,]"step_id":N,"action_id":"N"|N|null,"session":<ms epoch>}
 	// The response is not JSON (HTML content type) and is ignored. `session` is a client-generated millisecond epoch, constant for the visit.
 	// The page sends the Continue action id as a string and the rsvp_yes action id as a number; callers pass whichever the page sends.
 	VowEvent selected = context.SelectedEvent!;
 	string body = JsonSerializer.Serialize(new LogInteractionRequest { AttendeeId = attendeeId, StepId = stepId, ActionId = actionId, Session = context.SessionMs }, new JsonSerializerOptions());
-	await RunOptionalAsync(label, async () => {
-		Require(await SendAsync(label, ApiRequest(HttpMethod.Post,
+	await RunOptionalAsync(stepNumber, label, async () => {
+		Require(await SendAsync(stepNumber, label, ApiRequest(HttpMethod.Post,
 			$"{Vow.ApiBase}/api/v2/events/{selected.Uuid}/journeys/{selected.JourneyId}/log-interaction", Vow.GoOrigin,
 			json: body, useSocketId: true), TimeSpan.FromMilliseconds(OptionalTimeoutMs)));
 	});
