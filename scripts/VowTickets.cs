@@ -112,6 +112,8 @@ DateTime runTime = DateTime.Now;
 DateTime? showOpenTime = null;	// when the show opens, if known (the SNL schedule, or the replay server's --open-in): the end of the run reports the time since then
 string selectorText = "";	// what the selector looks for, in words: the config's Show, or --title
 string lastShowCheck = "";	// the text of the last show check that was printed; a check prints only when its result changes
+bool countdownShowing = false;	// the countdown line (rewritten in place, no newline) is the last thing on the screen
+bool firstShowCheck = true;	// the first show check always prints its step line; later ones only when something is wrong
 DateTime scriptStart = DateTime.Now;
 
 const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=min|partial|full] [--submit] [--list] [--no-wait] [--title=TEXT] [--group-size=N] [--replay=PORT|URL] [--open-in=SECONDS] [--proxy=PORT] [--no-proxy] [--help]   (--help describes each option)";
@@ -464,29 +466,53 @@ bool WaitUntilRunTime() {
 	ctrlCStopsCleanly = true;
 	var redTimeSpan = TimeSpan.FromMinutes(5);
 	var nextShowCheck = now.AddSeconds(ShowCheckEverySeconds);
-	while (now < runTime && !stop.IsCancellationRequested) {
-		if (now >= nextShowCheck && !runConfig.ListOnly) {	// not awaited: the countdown goes on while the list is fetched
-			nextShowCheck = now.AddSeconds(ShowCheckEverySeconds);
-			_ = CheckShowNameAsync();
+	SetCursorVisible(false);	// the countdown rewrites its line twice a second; a visible cursor would flicker back and forth
+	try {
+		while (now < runTime && !stop.IsCancellationRequested) {
+			if (now >= nextShowCheck && !runConfig.ListOnly) {	// not awaited: the countdown goes on while the list is fetched
+				nextShowCheck = now.AddSeconds(ShowCheckEverySeconds);
+				_ = CheckShowNameAsync();
+			}
+			TimeSpan remaining = runTime - now;
+			countdownShowing = true;
+			ConsoleEx.Write($"\rRun In: {Fg.For(remaining < redTimeSpan ? ConsoleColor.Red : ConsoleColor.Green)}{remaining.Days} Days {remaining:hh\\:mm\\:ss}{Fg.Restore} at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
+			stop.Token.WaitHandle.WaitOne((int)Math.Min(remaining.TotalMilliseconds, 500));
+			now = DateTime.Now;
 		}
-		TimeSpan remaining = runTime - now;
-		ConsoleEx.Write($"\rRun In: {Fg.For(remaining < redTimeSpan ? ConsoleColor.Red : ConsoleColor.Green)}{remaining.Days} Days {remaining:hh\\:mm\\:ss}{Fg.Restore} at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
-		stop.Token.WaitHandle.WaitOne((int)Math.Min(remaining.TotalMilliseconds, 500));
-		now = DateTime.Now;
+	}
+	finally {
+		SetCursorVisible(true);
 	}
 	ctrlCStopsCleanly = false;
+	countdownShowing = false;
 	ConsoleEx.WriteLine("");
 
 	return !stop.IsCancellationRequested;
 }
 
+// Cosmetic: never throws (it fails when the output is redirected to a file or a pipe).
+void SetCursorVisible(bool visible) {
+	try { Console.CursorVisible = visible; }
+	catch (Exception) { }
+}
+
 // Fetches the events list and says whether the chosen show (the same selector Step 3 will use) is in it. Prints only when the answer changes, so a
 // check every minute stays quiet. A failure to check is reported but never stops the run: Step 3 asks again at the run time.
+// The step line ("2. check the show name: GET ... -> 200") is printed by the first check, and later only when the request failed or the check
+// found a problem that is new (the show is not in the list, the list is empty, the list could not be read).
 async Task CheckShowNameAsync() {
+	const string stepName = "2. check the show name";
+	void OwnLine() { if (countdownShowing) { countdownShowing = false; ConsoleEx.WriteLine(""); } }   // the countdown is rewritten in place: leave its line alone
+	bool first = firstShowCheck;
+	firstShowCheck = false;
+	bool stepPrinted = false;
 	ConsoleColor color;
 	string message;
+	Reply? reply = null;
 	try {
-		List<VowEvent> events = ParseEvents(Require(await SendAsync("2. check the show name", EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs))).Body);
+		reply = await SendAsync(stepName, EventsListRequest(), TimeSpan.FromMilliseconds(PollTimeoutMs), quiet: true);
+		if (first || !reply.Ok) { OwnLine(); WriteStepLn(stepName, reply.Details); stepPrinted = true; }
+		List<VowEvent> events = ParseEvents(Require(reply).Body);
 		string names = string.Join(", ", events.Select(e => $"\"{e.Name}\" ({e.Status})"));
 		List<VowEvent> matches = events.Where(selector).ToList();
 		if (events.Count == 0) {
@@ -509,7 +535,8 @@ async Task CheckShowNameAsync() {
 	}
 	if (message == lastShowCheck) return;
 	lastShowCheck = message;
-	ConsoleEx.WriteLine("");	// the countdown line is rewritten in place; start a line of its own
+	OwnLine();
+	if (color != ConsoleColor.Green && reply != null && !stepPrinted) WriteStepLn(stepName, reply.Details);   // a new problem: show the request that found it
 	ConsoleEx.WriteLine($"{Fg.For(color)}{message}{Fg.Restore}");
 	LogLn($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}");
 }
@@ -984,7 +1011,8 @@ void LogNoResponse(Guid requestId, TimeSpan elapsed, Exception ex) {
 // timeout: give up if there is no complete answer (headers and body) within this time; the failure is a TaskCanceledException with a TimeoutException
 //          inside, which IsRetryable counts as retryable. null = HttpClient's own 100 s.
 // cancel:  lets the caller call the request off (a poll that is no longer needed); that is an OperationCanceledException, not a timeout.
-async Task<Reply> SendAsync(string label, HttpRequestMessage request, TimeSpan? timeout = null, CancellationToken cancel = default) {
+// quiet: do not print the step line; the caller prints it (reply.Details) when it wants to. The request and the answer are logged as always.
+async Task<Reply> SendAsync(string label, HttpRequestMessage request, TimeSpan? timeout = null, CancellationToken cancel = default, bool quiet = false) {
 	Guid requestId = Guid.NewGuid();
 	await LogRequestAsync(requestId, label, request);
 	var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -1011,8 +1039,9 @@ async Task<Reply> SendAsync(string label, HttpRequestMessage request, TimeSpan? 
 	string? rateLimit = response.Headers.TryGetValues("x-ratelimit-limit", out var lim) ? lim.First() : null;
 	string? retryAfter = response.Headers.TryGetValues("Retry-After", out var retry) ? retry.First() : null;
 	string rate = rateLimit != null ? $"  [rate limit {rateRemaining ?? "?"}/{rateLimit} left]" : "";
-	WriteStepLn(label, $"{request.Method} {request.RequestUri!.AbsolutePath} -> {(int)response.StatusCode}{rate}");
-	return new Reply(response.StatusCode, body, rateRemaining, retryAfter);
+	string details = $"{request.Method} {request.RequestUri!.AbsolutePath} -> {(int)response.StatusCode}{rate}";
+	if (!quiet) WriteStepLn(label, details);
+	return new Reply(response.StatusCode, body, rateRemaining, retryAfter, details);
 }
 
 // Any non-2xx throws (with the status attached so retries can tell a 5xx from a 4xx).
@@ -1219,7 +1248,8 @@ public sealed class RunConfig {
 	public bool Wait { get; set; } = true;
 }
 
-public sealed record Reply(HttpStatusCode Status, string Body, string? RateRemaining, string? RetryAfter) {
+/// <summary>Details = the text of the step line: "GET /path -> 200  [rate limit ...]".</summary>
+public sealed record Reply(HttpStatusCode Status, string Body, string? RateRemaining, string? RetryAfter, string Details = "") {
 	public bool Ok => (int)Status is >= 200 and < 300;
 }
 
