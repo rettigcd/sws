@@ -3,11 +3,12 @@
 	"workbench.colorCustomizations": {
 		// Activty bar (left icons)
 		"activityBar.background": "#e67ca5",
-		"activityBar.foreground": "#ffffff",
-		"activityBar.activeBorder": "#ffffff",
+		"activityBar.foreground": "#000000",
+		"activityBar.activeBorder": "#000000",
 		"activityBar.inactiveForeground": "#000000",
 		"titleBar.activeBackground": "#e67ca5",
-		"titleBar.inactiveBackground":"#e67ca5"
+		"titleBar.inactiveBackground":"#e67ca5",
+		"titleBar.activeForeground": "#000000",
 	},
 
 	// Tab / indents
