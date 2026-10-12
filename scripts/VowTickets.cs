@@ -475,7 +475,7 @@ bool WaitUntilRunTime() {
 			}
 			TimeSpan remaining = runTime - now;
 			countdownShowing = true;
-			Console.WriteEx($"\rRun In: [{(remaining < redTimeSpan ? "Red" : "Green")}]{remaining.Days} Days {remaining:hh\\:mm\\:ss}[Restore] at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
+			Console.WriteEx($"\rRun In: [Bg::DarkBlue][{(remaining < redTimeSpan ? "Red" : "Green")}]{remaining.Days} Days {remaining:hh\\:mm\\:ss}[Restore][Bg::Restore] at {runTime:HH:mm:ss} on {runTime:MMM d}  (Control-C to exit)");
 			stop.Token.WaitHandle.WaitOne((int)Math.Min(remaining.TotalMilliseconds, 500));
 			now = DateTime.Now;
 		}
