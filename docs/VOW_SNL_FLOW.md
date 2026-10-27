@@ -11,17 +11,18 @@ after the 10:00 AM ET opening, when both shows were already full.
 - `snl_sep_24_part_2.saz`: the registration flow, ending in "Sorry, registration is now closed" (16 exchanges after stripping)
 
 A second week's opening (2026-10-01) was recorded by a browser capture and a script log. What they changed or added is in
-**section 11**; where it contradicts an earlier section, section 11 is newer.
+**section 11**; where it contradicts an earlier section, section 11 is newer. The third opening (2026-10-08) produced the first
+**successful** registration; it is in **section 12**, which is newer still.
 
 Terminology: as in the rest of this repo, an "exchange" is one HTTP request/response pair.
 Exchange numbers below are those in the **stripped** captures, and were renumbered when
 non-participating exchanges were deleted (part 2's `PUT rsvp` was 28 before stripping, 12 after).
 Numbers only identify entries in the current files; they are not stable identifiers.
 
-**Key limitation:** both events were full, so the *successful* registration response was never
-captured. Anything about the success path is inferred from the site's JavaScript and step
-definitions, and is marked (inferred) below. A capture taken while a show is open is needed to
-confirm it.
+**Key limitation (Sep 24 captures only):** both events were full, so the *successful* registration response was not
+captured there. Anything about the success path in sections 1 to 10 is inferred from the site's JavaScript and step
+definitions, and is marked (inferred). **Resolved 2026-10-08:** a successful registration was captured; see section 12,
+which confirms or corrects those inferences.
 
 ---
 
@@ -345,9 +346,9 @@ What is **not known** (not in any capture):
 - Other endpoints (`load-for-visitor`, the listing) showed no limit, but that is not proof. Poll them modestly.
 - Test the window in a safe way: while events are full, send several RSVPs and watch `x-ratelimit-remaining` count down and reset (each gets 422 and takes no seat).
 
-Response on success: **not captured** (inferred: HTTP 200 with the attendee record and a pointer to step
-6109, and the SPA then logs an interaction for step 6109 and shows the confirmation with a
-"Booking Number").
+Response on success: not captured on Sep 24. **Captured 2026-10-08: HTTP 200 with the new attendee record and an activity log
+entry, see section 12.2.** (The earlier inference of a pointer to the confirmation step was wrong: the response names no step; the SPA
+moves on by itself and then logs the interaction for the confirmation step, with the new `attendee_id`.)
 
 ### 5.5 `log-interaction`
 
@@ -458,7 +459,7 @@ the older, longer versions that replay about 60 steps. The vow.app flow is far s
 | Step 4: series settings (max group size, attribution answer, phone state) | `load-for-visitor`: `journey.capacity`, `signup_count`, `is_over_capacity`, and `steps[type=rsvp].options.max_plus_ones` | Form fields here are fixed: first name, last name, email. No phone, no attribution. |
 | Step 7: events list (numeric `id`, `identifier`, `slotsAvailable`, `maxGroupSize`) | `GET api.vow.app/api/v2/public/by-url/nbc/events` (`uuid`, `journey_id`, `capacity`, `attending_count`, `status`) | Seats free = `capacity - attending_count`. Selectors: match on `name`, e.g. contains "Dress" or "Live". `hasPassed` has no direct equivalent; use `starts_at` or `status`. |
 | Step 9: create event booking session | `POST .../log-interaction` (optional) | Not shown to be required. |
-| Step 13: `POST .../booking-widget/series/{series}/event/book` | `PUT api.vow.app/api/v2/events/{uuid}/attendees/rsvp` | Body in 5.4. Qudini returns `refNumber`; the vow.app success shape is unknown. |
+| Step 13: `POST .../booking-widget/series/{series}/event/book` | `PUT api.vow.app/api/v2/events/{uuid}/attendees/rsvp` | Body in 5.4. Qudini returns `refNumber`; vow.app returns the attendee record (booking number = `registration_sequence_number`, section 12.2). |
 | Steps 8, 10, 12, 14: analytics | `log-interaction` calls | Optional. |
 
 `GetGroupSizeToRequest` becomes `plus_ones = min(GroupSize - 1, max_plus_ones)`, since vow.app counts *additional* guests (0 or 1 here),
@@ -474,7 +475,7 @@ whereas Qudini's `groupSize` is total people. This mapping (`groupSize` = `plus_
 3. **(Optional) mimic the browser.** Pusher connect, and `log-interaction` calls (landing, then the Continue action to step 6108).
    Unknown whether the server requires any of them.
 4. **Submit.** `PUT api.vow.app/api/v2/events/{uuid}/attendees/rsvp` with the body in 5.4.
-5. **Interpret the result.** 422 with `capacity_full: true` means full. Anything else needs the success capture to define.
+5. **Interpret the result.** 422 with `capacity_full: true` means full. HTTP 200 with `attendees.created[0]` is success (section 12.2).
 
 ### 7.4 Design points
 
@@ -494,13 +495,13 @@ whereas Qudini's `groupSize` is total people. This mapping (`groupSize` = `plus_
 
 ### 7.5 Open items to resolve before the script is complete
 
-1. The success response of `PUT rsvp` (needs a capture while a show is open).
+1. ~~The success response of `PUT rsvp` (needs a capture while a show is open).~~ Resolved 2026-10-08: HTTP 200 with the attendee record (section 12.2).
 2. Whether `X-Socket-ID` must be a real Pusher id (see 5.6). It was sent as the literal string `undefined` on the first listing call and the server still returned 200, so it may not be validated.
-3. Whether `log-interaction` calls and the Pusher connection are required for an event that has room. Not checked for a full event (7.6); untested otherwise.
-4. Whether cookies are required for an event that has room. The listing needs none, and a full event's RSVP ignored their absence (7.6). Untested otherwise.
+3. Whether `log-interaction` calls and the Pusher connection are required for an event that has room. Not checked for a full event (7.6). The Oct 8 browser sent both, and the registration succeeded (section 12.3), but whether either is *needed* is still untested. The follow-up `log-interaction` appears to trigger the confirmation email (section 12.3).
+4. Whether cookies are required for an event that has room. **Answered for the browser 2026-10-08:** it sent only the `AWSALBCORS` load-balancer cookie on every call, including the successful RSVP (section 12.4). Whether a request with *no* cookies at all succeeds is still untested.
 5. ~~Exact `status` values in the listing when a show is open or upcoming.~~ Resolved 2026-10-01: `coming_soon`, then `open`, then `closed` (section 11.2).
 6. Whether there is any bot detection (see section 9).
-7. Whether `plus_ones` is additional guests (assumed) or total group size.
+7. ~~Whether `plus_ones` is additional guests (assumed) or total group size.~~ Resolved 2026-10-08: additional guests. `plus_ones: 1` created two attendee rows (section 12.2).
 
 ### 7.6 Tests of what is required (run 2026-09-24)
 
@@ -651,7 +652,7 @@ under a minute.
   anonymous visitor makes were unchanged.
 - **The events list now sets the Laravel cookies** (`XSRF-TOKEN`, `vow_session`, a random-named one) on a script's first request.
   Section 4 described it as cookie-free.
-- **The success response of `PUT rsvp` is still not captured** (open item 7.5.1).
+- **The success response of `PUT rsvp` was not captured this week** (open item 7.5.1; captured on 2026-10-08, section 12).
 
 ### 11.5 Consequences for `scripts/VowTickets.cs`
 
@@ -662,3 +663,94 @@ under a minute.
   local clock error) was not observed. Not implemented yet: the script starts at 10:00:00.5.
 - Spend as little time as possible between seeing `open` and sending the RSVP: the show was full in about 41 s, and `load-for-visitor` alone
   took about 7 s. This is why `--mode=1` (RSVP only) exists.
+
+---
+
+## 12. The 2026-10-08 opening: the first successful registration
+
+Source: `saz/vow/snl_oct_08/snl_oct_08.saz` (browser capture, 09:10 to about 10:00; `snl_oct_08_pre.saz` is the earlier listing-only part). Times are Eastern
+(UTC-4). The `.saz` and its JSON hold a real name and work email in the RSVP body, and the attendee `pass_code`; they are git-ignored. Do not commit them or paste those values here.
+The same flow is replayed by `snl-replay` (`replay-data/bodies/api.vow.app/__template_rsvp-success.json` and `__template_registered-journey.json`, with placeholder names).
+
+### 12.1 Timeline
+
+| Time | Event |
+|---|---|
+| 09:10:43 to 09:59:43 | Listing polls (every 20 s, sometimes 60 s): both shows `coming_soon`. |
+| 09:59:55 to 10:00:00 | The page polled every second for the last 6 s (the userscript's rapid-poll phase). |
+| 10:00:00.200 | **Both shows `open`**, with `register_url`. The 1 s polls at 09:59:55 to 09:59:59.19 were all `coming_soon`, so opening was between 09:59:59.2 and 10:00:00.2, i.e. at 10:00:00 as before. |
+| 10:00:00.385 | `GET go.vow.app/event/{uuid}/journeys/1406` (Live Show), 185 ms after the `open` poll. |
+| 10:00:01.07 | `GET api/auth/user` (401, ignored). |
+| 10:00:02.54 | `GET load-for-visitor` (200; sent 10:00:02.41, so about 2 s after the page, not the 7 s of Oct 1). `is_over_capacity: false`, `signup_count` 30 of 305. |
+| 10:00:02.87 and .92 | `POST log-interaction` for step 6280 (landing), then step 6281 (RSVP form, action 4875). |
+| 10:00:03.36 | **`PUT rsvp` returns 200.** `registration_sequence_number` 37. About 3.2 s after the show opened. |
+| 10:00:03.83 | `GET load-for-visitor?attendee={id}` (200). `signup_count` 40, `me` set, 2 attendees. |
+| 10:00:04.39 | `POST log-interaction` with `attendee_id`, step 6282 (confirmation), action 4876 (200). |
+
+Compared with Oct 1 (11.1), the same fast path (listing poll to RSVP in about 3 s) beat the rush: the show had only 30 signups when the page loaded and 40 a second later.
+The browser went straight from the `open` poll to the registration page, which fits the userscript's "go to `register_url` as soon as our own poll sees open" design.
+
+### 12.2 The successful `PUT rsvp`
+
+Request: as section 5.4. Body `{"rsvp":true,"plus_ones":1,"me":null,"journey":1406,"group_id":null,"first_name":...,"last_name":...,"email":...}` (143 bytes), with `Origin: https://go.vow.app`,
+`Referer: https://go.vow.app/` and `X-Socket-ID: <real Pusher socket id>`.
+
+Response: **HTTP 200**, `Content-Type: application/json`, `x-ratelimit-limit: 10`, `x-ratelimit-remaining: 8` (this was the only RSVP in the capture, so one other request to that endpoint, outside the capture, had already been counted in the window). Top-level keys:
+
+| Key | Contents |
+|---|---|
+| `attendees.created` | A list of the new attendee rows. `plus_ones: 1` created **two** rows (the registrant and the guest), so `plus_ones` is the number of *additional* guests (open item 7.5.7 resolved). The registrant's row has `parent_attendee_id` equal to its own `id`. |
+| `activity_logs.created` | One entry: icon `AttendeeIsRsvp`, content "RSVP Status changed ... Pending to Yes". |
+
+Fields of an attendee row worth knowing (the row has about 50; not all listed):
+
+| Field | Meaning |
+|---|---|
+| `id` | Attendee id. Used as `attendee` in the next `load-for-visitor` and as `attendee_id` in `log-interaction`. |
+| `registration_sequence_number` | **The booking number / place in line** (the page's "Standby Reservation Booking Number"). 37 here. |
+| `is_attending: true`, `is_rsvp: 1`, `is_waitlisted: false` | Confirmed, not on a waiting list. |
+| `registration_journey_id`, `event_uuid` | Journey 1406, the Live Show uuid. |
+| `first_name`, `last_name`, `email`, `full_name` | Echo of the submitted values. |
+| `pass_code` | Random 20-character code. It appears in the attendee's pass link (`...?wl=yes` form seen in the journey data); treat it as a credential. |
+| `qr_src` | `https://api.vow.app/api/v2/events/attendees/{id}/qr-code`. |
+| `rsvped_at`, `created_at`, `updated_at` | Server time in UTC (14:00:03 here). |
+| `is_email_enabled`, `is_sms_enabled` | `true`; `phone_number` was `null`. |
+
+How a script should decide: 200 with a non-empty `attendees.created` is success; 422 with `capacity_full: true` is full (section 5.4); anything else is a failure to report.
+
+### 12.3 What the browser sent after the RSVP
+
+1. `GET /api/v2/events/{uuid}/journeys/{journey}/load-for-visitor?attendee={attendee_id}`: the journey reloaded for the new attendee (`me` is the registrant, `attendees` has both rows, `signup_count` includes them).
+2. `POST .../log-interaction` with `{"attendee_id":N,"step_id":<confirmation step>,"action_id":<the YES action id as a number>,"session":<ms epoch>}` (200, body `1`).
+   Note `action_id` is a **number** here but a **string** (`"4875"`) in the two calls before the RSVP, and `null` on the first call of a visit.
+   Per the repo's history (commits `42516a6`, `a1646d2`), this call is what triggers the confirmation email; the RSVP response alone does not. `VowTickets.cs` steps 12 and 13 send these two calls in partial and full modes.
+
+The listing, journey and RSVP calls all used HTTP/1.1 keep-alive in this capture (`Connection: keep-alive`); the Oct 27 capture shows HTTP/2.
+
+### 12.4 Cookies, socket id and the other open items
+
+- **Cookies.** Every `api.vow.app` call from the browser, including the successful RSVP, carried only the `AWSALBCORS` load-balancer cookie. No `vow_session`, `XSRF-TOKEN` or random-named cookie was sent (as on Oct 1, 11.4). So a browser-faithful client needs no session cookies. Whether a request with no cookies at all also succeeds is still untested.
+- **`X-Socket-ID`.** All calls after the Pusher connection carried the same real socket id (`1766609.5225894`). Whether a fake or missing id still succeeds on an open event is untested (a full event accepted a made-up one, 7.6).
+- **Open item 7.5.3.** `log-interaction` and the Pusher connection were both present on the successful run; whether either is required is untested.
+
+### 12.5 IDs for this week
+
+| Item | Dress Rehearsal | Live Show |
+|---|---|---|
+| Event uuid | `a4ca1ec9-c1bc-491e-9aee-9d39b00c17eb` | `43f0d714-9761-430e-8685-dca1bd0b8490` |
+| Journey id | 1404 | 1406 |
+| Steps (landing, RSVP, confirmation, closed) | not captured | 6280, 6281, 6282, 6283 (`capacity_step_id` 6283) |
+| Actions (Continue, YES, "Nr. of Att >300") | not captured | 4875, 4876, 4877 |
+| `max_plus_ones` | not captured | 1 |
+| Capacity | not captured | 305 |
+| Journey `created_at` | not captured | 2026-10-06 16:12:12 UTC |
+| `starts_at` | 2026-10-10 20:00 UTC | 2026-10-10 23:30 UTC |
+
+Step and action ids change every week (Sep 24: 6107 to 6110; Oct 1: 6173 to 6176; Oct 8: 6280 to 6283). Read them from `load-for-visitor`; never hard-code them.
+
+### 12.6 Check on 2026-10-27
+
+`saz/vow/20261027-152312.saz` (listing page only, 23 exchanges) was taken 17 days after the Oct 10 shows. The list still held those two events, both `closed`, with
+the same fields as on Oct 8 (`uuid`, `name`, `starts_at`, `theme`, `status`). The `pro.vow.app` bundles were redeployed (new `_nuxt` file hashes and module numbering), but the list component is
+unchanged: it polls every 20 s, shows "Register Now" only for `open` with a `register_url`, "Coming Soon" for `coming_soon`, and otherwise a closed button, with the same `nbc-page` / `nbc-card` class names.
+The browser was Chrome 156 over HTTP/2. Nothing in the three scripts needed to change for it. The next opening has not yet appeared in a capture.
