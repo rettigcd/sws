@@ -435,8 +435,8 @@ the older, longer versions that replay about 60 steps. The vow.app flow is far s
 - **Shape:** top-level script with a `Context` class, one `StepN_...` async method per HTTP call, `SendAsync`
   (throws on non-2xx, prints one line) and `SendOptionalAsync` (logs and continues) helpers, and small DTO classes with
   `[JsonPropertyName]`.
-- **CLI/dry-run design:** default is a dry run that sends only the read-only steps and prints the booking request; `--submit`
-  sends it; `--list` prints the events and stops; `--event`, `--title` and the default "first event not passed with
+- **CLI/dry-run design:** the booking request is sent by default; `--no-submit` is a dry run
+  that sends only the steps before it; `--list` prints the events and stops; `--event`, `--title` and the default "first event not passed with
   seats" pick the event; `UserConfig` entries plus `--config INDEX` hold per-user data; `--group-size` overrides it.
 - **Timed start:** `GetNextThursday10Am(msDelay)` and `WaitUntilRunTime()` count down to just after 10:00 AM Thursday.
   The vow.app window is the same (10:00 to 11:00 ET), so this carries over unchanged.

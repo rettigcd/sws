@@ -5,12 +5,12 @@
 // Everything here is based on the captures saz/snl_sep_24/snl_sep_24_part_1.saz and snl_sep_24_part_2.saz,
 // documented in docs/VOW_SNL_FLOW.md (read it first; section numbers below refer to it).
 //
-// Run:      dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=min|partial|full] [--submit] [--list] [--no-wait]
+// Run:      dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=min|partial|full] [--no-submit] [--list] [--no-wait]
 //                                               [--title=TEXT] [--group-size=N] [--proxy=PORT] [--no-proxy] [--help]
 // --config: REQUIRED. The JSON file with the attendee and show (see UserConfig; example: credentials/dean.json). The .json suffix is
 //           optional, and a bare name is also looked for in the credentials/ folder (git-ignored: these files hold personal data).
 //           --title and --group-size override the file, in any order.
-// Default:  a dry run in full mode (the default). The steps before the RSVP are sent, then the RSVP request is printed but NOT sent. Add --submit to send it.
+// Default:  full mode, and the RSVP IS sent. Add --no-submit for a dry run: the steps before the RSVP are sent, then the RSVP is NOT sent.
 // --list:   print every event (uuid, start, status, seats, name) after step 3 and stop. Skips the wait for the run time.
 // --no-wait: skip the wait for the run time (Thursday 09:59:59 for SNL configs) and start right away.
 // Retries: 5xx answers and network errors are retried one try at a time. The first events list and the journey load keep trying every second for
@@ -45,8 +45,8 @@
 //           Whether min and partial modes are enough is untested against an event that has room (see below).
 //           Full mode sends every call after the event opens, in the browser's order. The auth check and the Pusher connection do not
 //           depend on the event, so they COULD be sent during the polling to save time at the opening; see steps 6 and 8.
-// Series:   the config's "Series" is the vow.app "by-url" slug that lists the events. SNL is "nbc". (Qudini's series id has no equivalent.)
-// Note:     --submit registers with the data in the config and takes a real spot. Use it only when that is what you want.
+// Events:   the list is read from the vow.app "by-url" name NBC uses (Vow.SnlSlug, "nbc"). This script is for SNL only, so it is not a config setting.
+// Note:     every run without --no-submit registers with the data in the config and takes a real spot. Use --no-submit to test.
 //
 // What was tested (2026-09-24, both events full, RSVP sent with placeholder data; docs/VOW_SNL_FLOW.md 7.6):
 //   The RSVP got the same answer, 422 "This event is full", with: partial mode; full mode; no cookies at all; a made-up X-Socket-ID;
@@ -115,7 +115,7 @@ bool countdownShowing = false;	// the countdown line (rewritten in place, no new
 bool firstShowCheck = true;	// the first show check always prints its step line; later ones only when something is wrong
 DateTime scriptStart = DateTime.Now;
 
-const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=min|partial|full] [--submit] [--list] [--no-wait] [--title=TEXT] [--group-size=N] [--replay=PORT|URL] [--open-in=SECONDS] [--proxy=PORT] [--no-proxy] [--help]   (--help describes each option)";
+const string Usage = "Usage: dotnet run scripts/VowTickets.cs -- --config=FILE [--mode=min|partial|full] [--no-submit] [--list] [--no-wait] [--title=TEXT] [--group-size=N] [--replay=PORT|URL] [--open-in=SECONDS] [--proxy=PORT] [--no-proxy] [--help]   (--help describes each option)";
 
 // --help: every option, one per line, in alphabetical order within its section (options, then the config overrides)
 string[] helpLines = {
@@ -126,11 +126,12 @@ string[] helpLines = {
 	"  --list             Print every event (uuid, start, status, seats, name) and stop. Skips the wait for the run time.",
 	"  --mode=MODE        min|partial|full What is sent once the event is open: min = just the RSVP; partial = journey, RSVP, then the report that triggers the email; full (the default) = copy the browser.",
 	"  --no-proxy         Connect directly: ignore the system-wide proxy setting. Cannot be combined with --proxy.",
+	"  --no-submit        Dry run: do NOT send the RSVP. Without it the RSVP is sent and takes a real spot.",
 	"  --no-wait          Do not wait for the run time (Thursday 09:59:59 for SNL configs); start right away.",
 	"  --open-in=SECONDS  Only with --replay: make the replay server's show open SECONDS from now (0 to 86400). The run waits for it.",
 	"  --proxy=PORT       Send every request through the HTTP proxy at http://127.0.0.1:PORT (e.g. Fiddler on 8888), even requests to localhost.",
 	"  --replay=PORT|URL  Test against the local replay server instead of vow.app (PORT means http://localhost:PORT). Nothing is sent to the real site.",
-	"  --submit           Really send the RSVP. Without it the run is a dry run: the RSVP is printed, not sent.",
+	"  --submit           Send the RSVP. This is the default; it is still accepted so older commands keep working.",
 	"",
 	"Config overrides (replace the same setting in the config file):",
 	"  --group-size=N     Total people including you. Overrides the config.",
@@ -202,7 +203,8 @@ for (int i = 0; i < args.Length; i++) {
 			runConfig.ModeGiven = true;
 			break;
 		}
-		case "--submit" when value == null: runConfig.Submit = true; break;
+		case "--submit" when value == null: runConfig.Submit = true; break;	// the default; still accepted
+		case "--no-submit" when value == null: runConfig.Submit = false; break;
 		case "--list" when value == null: runConfig.ListOnly = true; break;
 		case "--no-wait" when value == null: runConfig.Wait = false; break;
 		case "--replay" when value != null: replayServer = value!; break;
@@ -287,11 +289,6 @@ if (groupSizeOverride != null) context.GroupSize = groupSizeOverride.Value;
 if (selectorOverride != null) selector = selectorOverride;
 selectorText = selectorOverrideText ?? $"the config's Show \"{context.Show}\"";
 
-if (context.Series == "") {
-	Console.Error.WriteLine("No series: set \"Series\" in the config file (SNL is \"nbc\").");
-	Console.Error.WriteLine(Usage);
-	return 2;
-}
 
 // Control-C during the wait (WaitUntilRunTime) or the polling (Step4_PollUntilOpen) stops cleanly, so the log is still written.
 // Outside those two, Control-C keeps its default behavior (the process ends at once) so it can always interrupt a stuck call.
@@ -371,7 +368,7 @@ try {
 		await Step4_PollUntilOpen(context);
 
 	Console.WriteLineEx($"[Green]   Selected Event: \"{context.SelectedEvent.Name}\" on {context.SelectedEvent.StartsAt}, status {context.SelectedEvent.Status}, {context.SelectedEvent.SlotsAvailable} seats [Restore](uuid {context.SelectedEvent.Uuid} journey {context.SelectedEvent.JourneyId})");
-	Console.WriteLineEx($"   mode {runConfig.ModeName}: {runConfig.ModeDescription}");
+	Console.WriteLineEx($"   mode={runConfig.ModeName} ({runConfig.ModeDescription})");
 
 	// 5-6. What the browser does when the registration page opens. (full mode only; not proven required)
 	// The page view is HTML from go.vow.app that the API cannot see, so nothing waits for it (it runs alongside the calls below).
@@ -403,7 +400,7 @@ try {
 	// ---- Exit Ramp ----
 	if (!runConfig.Submit) {
 		WriteStepLn(11, "submit RSVP", "dry run");
-		Console.WriteLineEx($"   [Red]RSVP NOT submitted[Restore] (pass --submit to send)");
+		Console.WriteLineEx($"   [Red]RSVP NOT submitted[Restore] (--no-submit was given)");
 		//Console.WriteLineEx($"   PUT {Vow.ApiBase}/api/v2/events/{context.SelectedEvent.Uuid}/attendees/rsvp");
 		//Console.WriteLineEx($"   {context.GetRsvpJson()}");
 		return 0;
@@ -460,7 +457,7 @@ bool WaitUntilRunTime() {
 	if (runTime <= now) return true;
 
 	if (!runConfig.Submit) {
-		Console.WriteLineEx($"[Red]WARNING: The RSVP will NOT be submitted.[Restore] Use --submit to ensure submission.\r\n");
+		Console.WriteLineEx($"[Red]WARNING: The RSVP will NOT be submitted.[Restore] (--no-submit was given)\r\n");
 	}
 
 	ctrlCStopsCleanly = true;
@@ -560,7 +557,7 @@ async Task Step3_GetEventsList(Context context) {
 }
 
 HttpRequestMessage EventsListRequest() =>
-	ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/public/by-url/{context.Series}/events", Vow.ProOrigin, accept: "application/json, text/plain, */*");
+	ApiRequest(HttpMethod.Get, $"{Vow.ApiBase}/api/v2/public/by-url/{Vow.SnlSlug}/events", Vow.ProOrigin, accept: "application/json, text/plain, */*");
 
 List<VowEvent> ParseEvents(string json) {
 	EventsResponse response = JsonSerializer.Deserialize<EventsResponse>(json, JsonOptions)
@@ -731,9 +728,15 @@ async Task Step11_SubmitRsvp(Context context) {
 			Console.WriteLineEx($"[Yellow]   registered (2xx), but the answer has no attendees. Body: {Excerpt(reply.Body, 1000)}[Restore]");
 			return;
 		}
+		Console.WriteLine();   // blank lines around the result so a success stands out
 		Console.WriteLineEx($"[Green]   REGISTERED for {selected.Name}[Restore]");
-		Console.WriteLineEx($"[Cyan]   Booking reference: {primary.RegistrationReference ?? "(not found in the response)"}[Restore]");
-		Console.WriteLineEx($"[Cyan]   In our standby reservation line, your number(s) are: {(places.Count > 0 ? string.Join(", ", places) : "(not found in the response)")}.[Restore]");
+		// The values themselves are black on light blue so they stand out; the rest of the line is light blue.
+		const string Hi = "[Black][Bg::Cyan]", HiEnd = "[Cyan][Bg::Restore]";
+		string reference = primary.RegistrationReference is string r ? $"{Hi}{r}{HiEnd}" : "(not found in the response)";
+		string numbers = places.Count > 0 ? $"{Hi}{string.Join(", ", places)}{HiEnd}" : "(not found in the response)";
+		Console.WriteLineEx($"[Cyan]   Booking reference: {reference}[Restore]");
+		Console.WriteLineEx($"[Cyan]   In our standby reservation line, your number(s) are: {numbers}.[Restore]");
+		Console.WriteLine();
 		return;
 	}
 
@@ -1150,7 +1153,6 @@ public sealed class Context {
 	public CookieContainer CookieJar { get; set; } = new();
 
 	// ------- config / options to select the desired event ------
-	public string Series { get; set; } = "";	// by-url slug
 	public string Show { get; set; } = "";
 
 	// User Properties (the RSVP form has only these fields; there is no phone number)
@@ -1182,8 +1184,7 @@ public sealed class Context {
 	public int? AttendeeId { get; set; }
 
 	public void InitializeFrom(UserConfig config) {
-		Console.WriteLineEx($"Using config:\r\n\tseries: {config.Series},\r\n\tshow: \"{config.Show}\",\r\n\tattendee: {config.FirstName} {config.LastName},\r\n\temail: {config.Email},\r\n\tgroup size: {config.GroupSize}\r\n");
-		Series = config.Series;
+		Console.WriteLineEx($"Using config:\r\n\tshow: [Cyan]{config.Show}[Restore],\r\n\tattendee: [Cyan]{config.FirstName} {config.LastName}[Restore],\r\n\temail: [Cyan]{config.Email}[Restore],\r\n\tgroup size: [Cyan]{config.GroupSize}[Restore]\r\n");
 		Show = config.Show;
 		FirstName = config.FirstName;
 		LastName = config.LastName;
@@ -1228,7 +1229,6 @@ public sealed class Context {
 // ======== Config / DTOs ===========
 // ==================================
 public sealed class UserConfig {
-	public string Series { get; set; } = "";	// by-url slug
 	public string Show { get; set; } = "";		// event selector (part of the event name)
 	public string FirstName { get; set; } = "";
 	public string LastName { get; set; } = "";
@@ -1244,7 +1244,7 @@ public sealed class RunConfig {
 	public bool ModeGiven { get; set; }		// --mode was on the command line (otherwise Mode is the default)
 	public string ModeName => Mode switch { 1 => "min", 2 => "partial", _ => "full" };
 	public string ModeDescription => Mode switch { 1 => "just the RSVP", 2 => "load the journey, the RSVP, then report it for the confirmation email", _ => "copy the browser" };
-	public bool Submit { get; set; }
+	public bool Submit { get; set; } = true;	// --no-submit turns it off (dry run)
 	public bool ListOnly { get; set; }
 	public bool Wait { get; set; } = true;
 }
