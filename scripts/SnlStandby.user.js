@@ -136,8 +136,13 @@
 	};
 	// Running on the local replay server (snl-replay/SnlReplay.cs) instead of the real sites? There every page and the API share one origin.
 	const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-	// The @match line covers every localhost port; only the replay server's port is ours. Other local apps are left alone.
-	if (isLocal && location.port !== '50219') return;
+	// The @match line covers every localhost port; only the replay server's ports are ours (the ones snl-replay/SnlReplay.cs tries, in its order).
+	// Other local apps are left alone.
+	const REPLAY_PORTS = ['50219', '45244', '45840'];
+	if (isLocal && !REPLAY_PORTS.includes(location.port)) {
+		console.error(`[SNL auto] Port ${location.port} is not an SnlReplay port. Aborting`);
+		return;
+	}
 	// CONFIG.TEST_OPEN_IN_SECONDS, but only on localhost: everything below uses this, never the CONFIG value, so on a real site it is always null.
 	const testOpenInSeconds = isLocal ? CONFIG.TEST_OPEN_IN_SECONDS : null;
 	const LIST_API = isLocal ? '/api/v2/public/by-url/nbc/events' : 'https://api.vow.app/api/v2/public/by-url/nbc/events';   // what the list page polls; CORS allows origin https://pro.vow.app

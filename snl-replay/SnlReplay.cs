@@ -95,7 +95,7 @@ string[] helpLines = {
 	"  --help           Show this list and exit.",
 	"  --no-load        Turn the under-load delays off. By default those slow calls each wait a flat 5 s before they are answered.",
 	"  --open           Open the site in the default browser when the server starts.",
-	"  --port N         Listen on port N. Without it: port 50219, or another free port if 50219 is in use.",
+	"  --port N         Listen on port N. Without it: the first free one of 50219, 45244, 45840, else a random free port.",
 	"  --rsvp ok|full   How the RSVP is answered. ok (the default): success, with a booking number that grows with the time since the show",
 	"                   opened (sold out after 300). full: every RSVP gets the captured \"event is full\" answer (422).",
 	"",
@@ -118,9 +118,10 @@ for (int i = 0; i < args.Length; i++) {
 	else { Console.WriteLine("Usage: SnlReplay [--port N] [--open] [--rsvp ok|full] [--email] [--no-load] [--failures]   (rsvp defaults to ok; no email is sent unless --email; the slow calls are on unless --no-load)");
 		Console.WriteLine("Run with --help for a description of each option."); return; }
 }
-if (port == null) {   // no --port: try the default port, and if something else is using it, any free port (picked by the system)
-	const int DefaultPort = 50219;
-	foreach (int candidate in new[] { DefaultPort, 0 }) {
+if (port == null) {   // no --port: try the preferred ports in order, then any free port (0 = picked by the system)
+	// 50219 is inside Windows' dynamic range (49152-65535), where Hyper-V / WSL can reserve it at boot; 45244 and 45840 are below that range.
+	int[] PreferredPorts = [50219, 45244, 45840];
+	foreach (int candidate in PreferredPorts.Append(0)) {
 		try {
 			var probe = new TcpListener(IPAddress.Loopback, candidate);
 			probe.Start();
