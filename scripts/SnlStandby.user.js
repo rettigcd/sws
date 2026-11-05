@@ -63,7 +63,7 @@
 		// second) WITHOUT waiting for the earlier ones, so a slow or hung request cannot hold up the next. A request is cancelled after POLL_TIMEOUT_MS,
 		// at most MAX_POLLS_IN_FLIGHT are out at once (so we do not use up the browser's connections), and the first answer that shows the show open
 		// wins: the other requests are cancelled. The page's own 20 s refresh is left alone.
-		FAST_POLL_MS: 1000,
+		FAST_POLL_MS: 500,
 		POLL_TIMEOUT_MS: 5000,
 		MAX_POLLS_IN_FLIGHT: 5,
 		GIVE_UP_AFTER_MIN: 90,              // stage 1: stop waiting this many minutes after the open time
@@ -92,6 +92,16 @@
 		// stage 2: after SUBMIT is clicked, if the RSVP has not been answered after this long, the banner starts to say so (and keeps counting). The script
 		// never cancels or resends an RSVP; the message only tells you to wait and not to click again.
 		RSVP_SLOW_NOTICE_MS: 10000,
+
+		// stage 1: DIRECT RSVP. The moment our poll sees the show open, send the RSVP straight to the API (PUT .../attendees/rsvp, journey id taken from
+		// register_url) instead of first loading the registration page, which took ~5 s and ran into the go-live load. Only used when SUBMIT is true.
+		//   accepted (2xx)              -> done; the registration page is never opened.
+		//   429 (rate limit) or "full"  -> stop and say so (the page would get the same answer and use up more of the allowance).
+		//   any other failure           -> fall back to the normal process: open the registration page, fill the form and click SUBMIT.
+		// The RSVP is sent once per tab and event (sessionStorage), so reloading the list page does not send it again. If there is no answer after
+		// DIRECT_RSVP_GIVE_UP_MS the request is cancelled and the normal process runs; the server may still have been processing it, so a duplicate is possible.
+		DIRECT_RSVP: true,
+		DIRECT_RSVP_GIVE_UP_MS: 15000,
 
 		// ---- REQUEST LOG ----
 		// Every request the pages make (fetch and XMLHttpRequest: time stamps, headers, whole request and response bodies) and their other downloads (timings
@@ -235,6 +245,7 @@
 		if (!(CONFIG.RELOAD_WAIT_MS >= 0)) return 'CONFIG.RELOAD_WAIT_MS must be 0 or more.';
 		if (!(CONFIG.SCRIPT_LOAD_TIMEOUT_MS >= 1000)) return 'CONFIG.SCRIPT_LOAD_TIMEOUT_MS must be at least 1000.';
 		if (!(CONFIG.NAVIGATE_TIMEOUT_MS >= 1000)) return 'CONFIG.NAVIGATE_TIMEOUT_MS must be at least 1000.';
+		if (!(CONFIG.DIRECT_RSVP_GIVE_UP_MS >= 1000)) return 'CONFIG.DIRECT_RSVP_GIVE_UP_MS must be at least 1000.';
 		if (!(CONFIG.RSVP_SLOW_NOTICE_MS >= 1000)) return 'CONFIG.RSVP_SLOW_NOTICE_MS must be at least 1000.';
 		if (!(CONFIG.LOG_AFTER_OPEN_MS >= 1000 && CONFIG.LOG_SETTLE_MS >= 0)) return 'CONFIG.LOG_AFTER_OPEN_MS must be at least 1000 and LOG_SETTLE_MS 0 or more.';
 		if (!Number.isInteger(CONFIG.NAVIGATE_ATTEMPTS) || CONFIG.NAVIGATE_ATTEMPTS < 1) return 'CONFIG.NAVIGATE_ATTEMPTS must be a whole number, 1 or more.';
@@ -788,6 +799,106 @@
 	}
 
 	// =====================================================================
+	// ==================  DIRECT RSVP (stage 1, see CONFIG.DIRECT_RSVP)  ==
+	// =====================================================================
+	/** A button at the bottom left of the page. One click calls onClick() and removes the button. (The banner ignores the mouse, so this is its own element.) */
+	function showFollowUpButton(onClick) {
+		const button = document.createElement('button');
+		button.id = 'snl-followup-button';
+		button.type = 'button';
+		button.textContent = 'If the confirmation email does not arrive, click here';
+		button.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;padding:10px 14px;font:700 14px/1.3 sans-serif;color:#fff;background:#b26a00;border:2px solid #fff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.45);cursor:pointer';
+		button.addEventListener('click', () => { button.remove(); onClick(); });
+		(document.body || document.documentElement).appendChild(button);
+	}
+
+	/** After an accepted direct RSVP: the two calls the registration page makes next, because one of them is what makes vow.app send the confirmation email
+	 *  (the PUT alone does not). Same order as the page: (1) GET load-for-visitor?attendee=<id>, (2) POST log-interaction for the "YES" action
+	 *  (the journey's action with function "rsvp_yes": step_id = where it leads, action_id = its id; both are read from (1), they differ per journey).
+	 *  Best effort: the RSVP is already accepted, so a failure here is only logged and shown, never retried. */
+	async function directRsvpFollowUp(event, journey, rsvpText, sessionMs) {
+		const base = (isLocal ? '' : 'https://api.vow.app') + `/api/v2/events/${event.uuid}/journeys/${journey}`;
+		const headers = { accept: 'application/json' };
+		try {
+			const created = ((JSON.parse(rsvpText).attendees || {}).created || []);
+			const primary = created.find((a) => a.is_primary) || created[0];
+			if (!primary || !primary.id) throw new Error('no attendee id in the RSVP answer');
+			const load = await fetch(`${base}/load-for-visitor?attendee=${primary.id}`, { headers, credentials: 'omit', __snlLabel: 'direct RSVP follow-up 1: load-for-visitor (script)' });
+			if (!load.ok) throw new Error(`load-for-visitor HTTP ${load.status}`);
+			const data = await load.json();
+			const actions = (data.journey && data.journey.actions) || data.actions || [];
+			const yes = actions.find((a) => a.function === 'rsvp_yes');
+			if (!yes) throw new Error('no "rsvp_yes" action in the journey');
+			log(`direct RSVP follow-up 1 done (attendee ${primary.id}); the log-interaction POST (step ${yes.to}, action ${yes.id}) waits for the button`);
+			// TEMPORARY, to find out which of the two calls triggers the email: the POST is not sent by itself. A button sends it when the user chooses.
+			showFollowUpButton(async () => {
+				try {
+					const logged = await fetch(`${base}/log-interaction`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, credentials: 'omit',
+						body: JSON.stringify({ attendee_id: primary.id, step_id: yes.to, action_id: yes.id, session: sessionMs }), __snlLabel: 'direct RSVP follow-up 2: log-interaction (script, button)' });
+					if (!logged.ok) throw new Error(`log-interaction HTTP ${logged.status}`);
+					log('direct RSVP follow-up 2 (log-interaction) sent by button');
+				} catch (e) {
+					log('direct RSVP follow-up 2 failed', e);
+					banner('The log-interaction call failed (' + ((e && e.message) || e) + ').', 'warn');
+				}
+			});
+		} catch (e) {
+			log('direct RSVP follow-up failed', e);
+			banner('The RSVP was accepted, but the follow-up calls that trigger the email failed (' + ((e && e.message) || e) + '). Check your email; if none arrives, open the pass link from the confirmation.', 'warn');
+		}
+	}
+
+	/** Sends the RSVP straight to the API for an open event from the list. Returns 'accepted' (done), 'stop' (429 / full / already sent: do nothing more)
+	 *  or 'fallback' (did not work: run the normal process). Never sends twice in one tab for the same event. */
+	async function tryDirectRsvp(event, openAtMs) {
+		const journey = ((event.register_url || '').match(/\/journeys\/(\d+)/) || [])[1];
+		if (!event.uuid || !journey) { log('direct RSVP: no event uuid / journey id in the list, using the normal process'); return 'fallback'; }
+		const sentKey = 'snlDirectRsvp_' + event.uuid;
+		let before = null;
+		try { before = sessionStorage.getItem(sentKey); } catch (e) { /* storage blocked */ }
+		if (before && before !== 'failed') {
+			await banner('A direct RSVP was already sent from this tab for this event. Not sending it again. Check your email and the registration page.', 'warn');
+			return 'stop';
+		}
+		if (before === 'failed') { log('direct RSVP: it failed earlier in this tab, using the normal process'); return 'fallback'; }
+		const mark = (value) => { try { sessionStorage.setItem(sentKey, value); } catch (e) { /* storage blocked */ } };
+		mark('sent');
+
+		const url = (isLocal ? '' : 'https://api.vow.app') + `/api/v2/events/${event.uuid}/attendees/rsvp`;
+		const body = JSON.stringify({ rsvp: true, plus_ones: CONFIG.GROUP_SIZE - 1, me: null, journey: Number(journey), group_id: null,
+			first_name: CONFIG.FIRST_NAME.trim(), last_name: CONFIG.LAST_NAME.trim(), email: CONFIG.EMAIL.trim() });
+		showOpenedAt = openAtMs;   // so recordRsvp can say how long after the open the RSVP was accepted
+		const sentAt = Date.now();
+		const controller = new AbortController();
+		const giveUp = setTimeout(() => controller.abort(), CONFIG.DIRECT_RSVP_GIVE_UP_MS);
+		const waiting = setInterval(() => banner(`Direct RSVP sent ${Math.round((Date.now() - sentAt) / 1000)} s ago, waiting for the answer. Do NOT click anything.`, 'info', true), 1000);
+		log('direct RSVP: sending', body);
+		banner('Show is open. Sending the RSVP directly...', 'ok');
+		let status = 0, text = '', problem = '';
+		try {
+			const response = await fetch(url, { method: 'PUT', headers: { accept: 'application/json', 'content-type': 'application/json' }, body, credentials: 'omit',
+				signal: controller.signal, __snlLabel: 'direct RSVP (script)' });
+			status = response.status;
+			text = await response.text();
+		} catch (e) {
+			problem = controller.signal.aborted ? `no answer within ${CONFIG.DIRECT_RSVP_GIVE_UP_MS / 1000} s, cancelled` : String(e);
+		} finally { clearTimeout(giveUp); clearInterval(waiting); }
+
+		if (status >= 200 && status < 300) {
+			mark('accepted');
+			recordRsvp({ time: new Date().toISOString(), url, status, requestBody: body, responseBody: text.slice(0, 5000), sequenceNumbers: sequenceNumbers(text) });
+			await directRsvpFollowUp(event, journey, text, sentAt);
+			return 'accepted';
+		}
+		log(`direct RSVP: ${problem || 'HTTP ' + status + ' ' + text.slice(0, 300)}`);
+		if (status === 429) { mark('failed'); await banner('Direct RSVP: rate limited (HTTP 429). Stopping; the normal process would get the same answer. Wait before trying by hand.', 'error'); return 'stop'; }
+		if (status === 422 && /capacity_full/.test(text)) { mark('failed'); await banner('Direct RSVP: the event is FULL (HTTP 422).', 'error'); return 'stop'; }
+		mark('failed');
+		await banner(`Direct RSVP did not work (${problem || 'HTTP ' + status}). Opening the registration page...`, 'warn');
+		return 'fallback';
+	}
+
+	// =====================================================================
 	// ==================  STAGE 1: the show list (pro.vow.app)  ===========
 	// =====================================================================
 	// Speeding up the page's own 20 s refresh (the "Register Now" button only appears when the page itself reloads the list). We leave the page's
@@ -1047,6 +1158,12 @@
 				found = true;
 				abortPolls(controller);   // the first answer that shows the show open wins; the other requests are not needed
 				log(`"${event.name}" is open (the answer to the request sent ${Date.now() - startedAt} ms ago)`);
+				if (CONFIG.DIRECT_RSVP && CONFIG.SUBMIT) {
+					goingTo = 'direct RSVP';   // holds off the page-link route (and the status redraw) while the RSVP is out
+					const outcome = await tryDirectRsvp(event, openAt.getTime());
+					if (outcome !== 'fallback') return;   // accepted, or stopped on purpose: goingTo stays set, which ends the loop
+					goingTo = null;   // did not work: the normal process below
+				}
 				if (speedup === 1) {
 					// mode 1: show the page what we found and follow its own link; if that cannot be done, redirect ourselves (mode 0)
 					const pushed = usePageVm((vm) => {
